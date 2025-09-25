@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR显示 + 可选 Let’s Encrypt TLS + rev别名)
+# Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR显示 + 可选 Let’s Encrypt TLS + rev/rev_uninstall快捷别名)
 # Author: ChatGPT
 
 set -e
@@ -148,7 +148,7 @@ VLESS_URI="$VLESS_URI"
 HY2_URI="$HY2_URI"
 EOF
 
-# 创建显示节点快捷脚本
+# 创建显示节点快捷脚本 rev
 cat > /root/show_singbox_nodes.sh <<'EOF'
 #!/bin/bash
 source /root/singbox_nodes.env
@@ -170,17 +170,28 @@ echo -e "\n二维码文件已生成：/root/vless_qr.png 和 /root/hy2_qr.png"
 EOF
 chmod +x /root/show_singbox_nodes.sh
 
-# 添加快捷别名 rev
+# 创建卸载快捷脚本 rev_uninstall
+cat > /root/uninstall_singbox.sh <<'EOF'
+#!/bin/bash
+echo ">>> 停止并禁用 sing-box"
+systemctl stop sing-box
+systemctl disable sing-box
+
+echo ">>> 删除配置和节点文件"
+rm -f /etc/sing-box/config.json
+rm -f /root/show_singbox_nodes.sh
+rm -f /root/singbox_nodes.env
+rm -f /root/vless_qr.png /root/hy2_qr.png
+
+echo ">>> 移除 rev 与 rev_uninstall 别名"
+sed -i '/alias rev=/d' ~/.bashrc
+sed -i '/alias rev_uninstall=/d' ~/.bashrc
+
+echo ">>> 卸载完成"
+EOF
+chmod +x /root/uninstall_singbox.sh
+
+# 添加快捷别名
 if ! grep -q "alias rev=" ~/.bashrc; then
     echo "alias rev='/root/show_singbox_nodes.sh'" >> ~/.bashrc
-    echo "快捷别名已添加：输入 rev 即可显示节点信息和二维码"
-fi
-
-# 启动 sing-box
-systemctl enable sing-box
-systemctl restart sing-box
-sleep 3
-
-# 检查端口监听
-echo
-[[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未
+    echo "快捷别名
