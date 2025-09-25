@@ -4,33 +4,33 @@
 
 set -e
 
-# 检查 root 权限
+# 1️⃣ 检查 root
 if [[ $EUID -ne 0 ]]; then
    echo "请使用 root 权限运行脚本"
    exit 1
 fi
 
-# 安装依赖
+# 2️⃣ 安装依赖
 apt update -y && apt install -y curl socat cron openssl
 
-# 安装 acme.sh
+# 3️⃣ 安装 acme.sh
 if ! command -v acme.sh &> /dev/null; then
     curl https://get.acme.sh | sh
     source ~/.bashrc
 fi
 
-# 用户输入
-read -rp "请输入你的域名 (例如: lg.lyn.edu.deal): " DOMAIN
+# 4️⃣ 用户输入
+read -rp "请输入域名 (例如: lg.lyn.edu.deal): " DOMAIN
 read -rp "请输入 VLESS 端口 (默认443): " VLESS_PORT
 VLESS_PORT=${VLESS_PORT:-443}
 read -rp "请输入 HY2 端口 (默认8443): " HY2_PORT
 HY2_PORT=${HY2_PORT:-8443}
 
-# 证书目录
+# 5️⃣ 证书目录
 CERT_DIR="/etc/ssl/$DOMAIN"
 mkdir -p "$CERT_DIR"
 
-# 检查证书是否存在
+# 6️⃣ 检查证书是否存在
 if [[ -f "$CERT_DIR/fullchain.pem" && -f "$CERT_DIR/privkey.pem" ]]; then
     echo "检测到已有证书，不重新申请"
 else
@@ -42,16 +42,16 @@ else
         --fullchain-file "$CERT_DIR/fullchain.pem"
 fi
 
-# 安装 sing-box
+# 7️⃣ 安装 sing-box
 if ! command -v sing-box &> /dev/null; then
     bash <(curl -fsSL https://sing-box.app/deb-install.sh)
 fi
 
-# 随机生成 UUID 和 HY2 密码
+# 8️⃣ 随机生成 UUID 和 HY2 密码
 VLESS_UUID=$(cat /proc/sys/kernel/random/uuid)
 HY2_PASS=$(openssl rand -base64 12)
 
-# 生成 sing-box 配置
+# 9️⃣ 生成 sing-box 配置
 cat > /etc/sing-box/config.json <<EOF
 {
   "log": { "level": "info" },
@@ -93,17 +93,17 @@ cat > /etc/sing-box/config.json <<EOF
 }
 EOF
 
-# 启动服务
+# 10️⃣ 启动服务
 systemctl enable sing-box
 systemctl restart sing-box
 
-# 输出节点信息
+# 11️⃣ 输出节点信息（直接可复制到 v2rayN）
 echo "===================================================="
 echo "Sing-box 部署完成 ✅"
 echo
-echo "VLESS 节点："
+echo "VLESS 节点（v2rayN 可用）："
 echo "vless://$VLESS_UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&flow=xtls-rprx-vision#VLESS-$DOMAIN"
 echo
-echo "HY2 节点："
+echo "HY2 节点（v2rayN 可用）："
 echo "hysteria2://hy2user:$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
 echo "===================================================="
