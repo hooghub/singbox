@@ -1,27 +1,11 @@
 #!/bin/bash
-# Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt)
-# 支持 --show 参数仅显示节点信息
+# Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR显示 + Let's Encrypt)
+# 支持部署完成后 review 节点信息
 # Author: ChatGPT
 
 set -e
 
-SHOW_ONLY=0
-if [[ "$1" == "--show" ]]; then
-    SHOW_ONLY=1
-fi
-
-# 节点订阅文件
-SUB_FILE="/root/singbox_nodes.json"
-
 show_nodes() {
-    if [[ ! -f "$SUB_FILE" ]]; then
-        echo "[✖] 节点文件 $SUB_FILE 不存在，请先部署节点。"
-        exit 1
-    fi
-    # 读取节点
-    VLESS_URI=$(jq -r '.vless' "$SUB_FILE")
-    HY2_URI=$(jq -r '.hysteria2' "$SUB_FILE")
-
     echo -e "\n=================== 节点信息 ==================="
     echo -e "VLESS 节点:\n$VLESS_URI"
     echo -e "HY2 节点:\n$HY2_URI"
@@ -31,15 +15,12 @@ show_nodes() {
     echo "$VLESS_URI" | qrencode -t ansiutf8
     echo -e "\nHY2 QR:"
     echo "$HY2_URI" | qrencode -t ansiutf8
-
-    echo -e "\n=================== 订阅文件内容 ==================="
-    cat "$SUB_FILE"
-    echo -e "\n订阅文件路径：$SUB_FILE"
-    exit 0
 }
 
-if [[ $SHOW_ONLY -eq 1 ]]; then
+# =================== 支持 --show 参数，仅显示节点 ===================
+if [[ "$1" == "--show" ]]; then
     show_nodes
+    exit 0
 fi
 
 echo "=================== Sing-box 高级部署 (Let’s Encrypt) ==================="
@@ -68,7 +49,7 @@ fi
 # 用户输入域名
 read -rp "请输入你的域名 (例如: lg.lyn.edu.deal): " DOMAIN
 
-# 检查域名解析
+# 检查域名解析是否指向当前 VPS
 echo ">>> 检查域名解析..."
 SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
 DOMAIN_IP=$(dig +short A "$DOMAIN" | tail -n1)
@@ -172,27 +153,16 @@ echo
 VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&flow=xtls-rprx-vision#VLESS-$DOMAIN"
 HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
 
-echo -e "\n=================== 节点信息 ==================="
-echo -e "VLESS 节点:\n$VLESS_URI"
-echo -e "HY2 节点:\n$HY2_URI"
+# 第一次显示节点信息
+show_nodes
 
-# 生成并显示 QR 码
-echo -e "\nVLESS QR:"
-echo "$VLESS_URI" | qrencode -t ansiutf8
-echo -e "\nHY2 QR:"
-echo "$HY2_URI" | qrencode -t ansiutf8
-
-# 生成订阅 JSON 文件
-cat > $SUB_FILE <<EOF
-{
-  "vless": "$VLESS_URI",
-  "hysteria2": "$HY2_URI"
-}
-EOF
-
-# 在屏幕显示订阅文件内容
-echo -e "\n=================== 订阅文件内容 ==================="
-cat "$SUB_FILE"
-echo -e "\n订阅文件已保存到：$SUB_FILE"
-
-echo -e "\n=================== 部署完成 ==================="
+# =================== 部署完成后 review 节点信息 ===================
+while true; do
+    read -rp "输入 review 查看节点信息，或者直接按回车退出: " REPLY
+    if [[ "$REPLY" == "review" ]]; then
+        show_nodes
+    else
+        echo "退出。"
+        break
+    fi
+done
