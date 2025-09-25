@@ -1,10 +1,10 @@
 #!/bin/bash
-# Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR/订阅)
+# Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt)
 # Author: ChatGPT
 
 set -e
 
-echo "=================== Sing-box 高级部署 ==================="
+echo "=================== Sing-box 高级部署 (Let’s Encrypt) ==================="
 
 # 检查 root
 [[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
@@ -19,12 +19,15 @@ if ! command -v acme.sh &>/dev/null; then
     source ~/.bashrc
 fi
 
+# 设置默认 CA 为 Let's Encrypt
+~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+
 # 安装 sing-box
 if ! command -v sing-box &>/dev/null; then
     bash <(curl -fsSL https://sing-box.app/deb-install.sh)
 fi
 
-# 用户输入
+# 用户输入域名
 read -rp "请输入你的域名 (例如: lg.lyn.edu.deal): " DOMAIN
 
 # 随机端口函数
@@ -56,11 +59,14 @@ HY2_PASS=$(openssl rand -base64 12)
 CERT_DIR="/etc/ssl/$DOMAIN"
 mkdir -p "$CERT_DIR"
 
-echo ">>> 申请 TLS 证书"
+echo ">>> 申请 Let's Encrypt TLS 证书"
 ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
 ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
   --key-file       "$CERT_DIR/privkey.pem" \
   --fullchain-file "$CERT_DIR/fullchain.pem" --force
+
+# 添加证书自动续签任务
+(crontab -l 2>/dev/null; echo "0 3 * * * ~/.acme.sh/acme.sh --cron --home ~/.acme.sh > /dev/null && systemctl restart sing-box") | crontab -
 
 # 生成 sing-box 配置
 cat > /etc/sing-box/config.json <<EOF
