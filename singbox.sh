@@ -1,7 +1,5 @@
 #!/bin/bash
-# Sing-box 高级部署脚本 (VLESS + HY2 + 自动端口 + 二维码 + rev 快捷 + 卸载 + 端口自检)
-# Author: ChatGPT
-
+# Sing-box 高级部署脚本 (最终可运行版)
 set -e
 
 echo "=================== Sing-box 部署 ==================="
@@ -51,20 +49,17 @@ HY2_PASS=$(openssl rand -base64 12)
 if [[ "$MODE" == "1" ]]; then
     CERT_DIR="/etc/ssl/$DOMAIN"
     mkdir -p "$CERT_DIR"
-
     VPS_IP=$(curl -s https://api.ipify.org)
     DOMAIN_IP=$(dig +short "$DOMAIN" | tail -n1)
     if [[ "$VPS_IP" != "$DOMAIN_IP" ]]; then
-        echo "[✖] 域名 $DOMAIN 没有指向本 VPS ($VPS_IP)，请先解析再运行"
+        echo "[✖] 域名 $DOMAIN 没有指向本 VPS ($VPS_IP)"
         exit 1
     fi
-
     ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
     ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
     ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
       --key-file "$CERT_DIR/privkey.pem" \
       --fullchain-file "$CERT_DIR/fullchain.pem" --force
-
     (crontab -l 2>/dev/null; echo "0 3 */30 * * ~/.acme.sh/acme.sh --cron --home ~/.acme.sh > /dev/null && systemctl restart sing-box") | crontab -
 fi
 
@@ -72,7 +67,7 @@ CONFIG_FILE="/etc/sing-box/config.json"
 mkdir -p $(dirname "$CONFIG_FILE")
 
 if [[ "$MODE" == "1" ]]; then
-cat > $CONFIG_FILE <<EOF
+cat > "$CONFIG_FILE" <<EOF
 {
   "log": { "level": "info" },
   "inbounds": [
@@ -80,33 +75,23 @@ cat > $CONFIG_FILE <<EOF
       "type": "vless",
       "listen": "0.0.0.0",
       "listen_port": $VLESS_PORT,
-      "users": [{ "uuid": "$UUID", "flow": "xtls-rprx-vision" }],
-      "tls": {
-        "enabled": true,
-        "server_name": "$DOMAIN",
-        "certificate_path": "$CERT_DIR/fullchain.pem",
-        "key_path": "$CERT_DIR/privkey.pem"
-      }
+      "users": [{"uuid": "$UUID","flow":"xtls-rprx-vision"}],
+      "tls": {"enabled": true,"server_name": "$DOMAIN","certificate_path":"$CERT_DIR/fullchain.pem","key_path":"$CERT_DIR/privkey.pem"}
     },
     {
       "type": "hysteria2",
       "listen": "0.0.0.0",
       "listen_port": $HY2_PORT,
-      "users": [{ "password": "$HY2_PASS" }],
-      "tls": {
-        "enabled": true,
-        "server_name": "$DOMAIN",
-        "certificate_path": "$CERT_DIR/fullchain.pem",
-        "key_path": "$CERT_DIR/privkey.pem"
-      }
+      "users": [{"password":"$HY2_PASS"}],
+      "tls": {"enabled": true,"server_name":"$DOMAIN","certificate_path":"$CERT_DIR/fullchain.pem","key_path":"$CERT_DIR/privkey.pem"}
     }
   ],
-  "outbounds": [{ "type": "direct" }]
+  "outbounds":[{"type":"direct"}]
 }
 EOF
 else
 VPS_IP=$(curl -s https://api.ipify.org)
-cat > $CONFIG_FILE <<EOF
+cat > "$CONFIG_FILE" <<EOF
 {
   "log": { "level": "info" },
   "inbounds": [
@@ -114,19 +99,19 @@ cat > $CONFIG_FILE <<EOF
       "type": "vless",
       "listen": "0.0.0.0",
       "listen_port": $VLESS_PORT,
-      "users": [{ "uuid": "$UUID" }],
-      "tls": { "enabled": false }
+      "users": [{"uuid":"$UUID"}],
+      "tls": {"enabled": false}
     },
     {
       "type": "hysteria2",
       "listen": "0.0.0.0",
       "listen_port": $HY2_PORT,
-      "users": [{ "password": "$HY2_PASS" }],
-      "tls": { "enabled": false },
-      "udp": { "enabled": true }
+      "users": [{"password":"$HY2_PASS"}],
+      "tls": {"enabled": false},
+      "udp": {"enabled": true}
     }
   ],
-  "outbounds": [{ "type": "direct" }]
+  "outbounds":[{"type":"direct"}]
 }
 EOF
 fi
@@ -135,23 +120,7 @@ systemctl enable sing-box
 systemctl restart sing-box
 sleep 3
 
-# 自检端口监听
-check_ports() {
-    echo
-    echo "=================== 端口自检 ==================="
-    if [[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]]; then
-        echo "[✔] VLESS TCP $VLESS_PORT 已监听"
-    else
-        echo "[✖] VLESS TCP $VLESS_PORT 未监听，可能防火墙或端口被占用"
-    fi
-
-    if [[ -n "$(ss -ulnp | grep $HY2_PORT)" ]]; then
-        echo "[✔] HY2 UDP $HY2_PORT 已监听"
-    else
-        echo "[✖] HY2 UDP $HY2_PORT 未监听，可能防火墙或端口被占用"
-    fi
-}
-
+# 节点 URI
 if [[ "$MODE" == "1" ]]; then
     VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&flow=xtls-rprx-vision#VLESS-$DOMAIN"
     HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
@@ -165,23 +134,23 @@ echo "$VLESS_URI" | qrencode -o /root/vless_qr.png
 echo "$HY2_URI" | qrencode -o /root/hy2_qr.png
 
 # 节点显示脚本
-cat > /root/show_singbox_nodes.sh <<EOF
+cat > /root/show_singbox_nodes.sh <<'EOF'
 #!/bin/bash
 echo "=================== 节点信息 ==================="
-echo -e "VLESS 节点:\\n$VLESS_URI"
-echo -e "HY2 节点:\\n$HY2_URI"
+echo -e "VLESS 节点:\n'"$VLESS_URI"'"
+echo -e "HY2 节点:\n'"$HY2_URI"'"
 echo "二维码文件:"
 echo "/root/vless_qr.png"
 echo "/root/hy2_qr.png"
 echo
 echo "=================== 端口自检 ==================="
 check_ports() {
-    if [[ -n "\$(ss -tulnp | grep $VLESS_PORT)" ]]; then
+    if [[ -n "$(ss -tulnp | grep '$VLESS_PORT')" ]]; then
         echo "[✔] VLESS TCP $VLESS_PORT 已监听"
     else
         echo "[✖] VLESS TCP $VLESS_PORT 未监听"
     fi
-    if [[ -n "\$(ss -ulnp | grep $HY2_PORT)" ]]; then
+    if [[ -n "$(ss -ulnp | grep '$HY2_PORT')" ]]; then
         echo "[✔] HY2 UDP $HY2_PORT 已监听"
     else
         echo "[✖] HY2 UDP $HY2_PORT 未监听"
@@ -189,17 +158,4 @@ check_ports() {
 }
 check_ports
 EOF
-chmod +x /root/show_singbox_nodes.sh
-
-# rev 快捷别名
-grep -qxF 'alias rev="/root/show_singbox_nodes.sh"' ~/.bashrc || echo 'alias rev="/root/show_singbox_nodes.sh"' >> ~/.bashrc
-source ~/.bashrc
-
-# 卸载脚本
-cat > /root/uninstall_singbox.sh <<EOF
-#!/bin/bash
-systemctl stop sing-box
-systemctl disable sing-box
-rm -f /etc/sing-box/config.json
-rm -f /root/vless_qr.png /root/hy2_qr.png /root/show_singbox_nodes.sh
-sed -i '/alias rev=\/root\/show_singbox
+chmod +x /root/sh
