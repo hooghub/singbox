@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sing-box 一键部署 VLESS + HY2
+# Sing-box 一键部署 VLESS + HY2 (TCP + UDP)
 # Author: ChatGPT
 
 set -e
@@ -19,7 +19,7 @@ if ! command -v acme.sh &> /dev/null; then
     source ~/.bashrc
 fi
 
-# 输入交互
+# 用户输入
 read -rp "请输入你的域名 (例如: lg.lyn.edu.deal): " DOMAIN
 read -rp "请输入 VLESS 端口 (默认443): " VLESS_PORT
 VLESS_PORT=${VLESS_PORT:-443}
@@ -30,7 +30,7 @@ HY2_PORT=${HY2_PORT:-8443}
 CERT_DIR="/etc/ssl/$DOMAIN"
 mkdir -p "$CERT_DIR"
 
-# 检测证书是否存在
+# 检查证书是否存在
 if [[ -f "$CERT_DIR/fullchain.pem" && -f "$CERT_DIR/privkey.pem" ]]; then
     echo "检测到已有证书，不重新申请"
 else
@@ -47,7 +47,7 @@ if ! command -v sing-box &> /dev/null; then
     bash <(curl -fsSL https://sing-box.app/deb-install.sh)
 fi
 
-# 生成随机 UUID 和 HY2 密码
+# 随机生成 UUID 和 HY2 密码
 VLESS_UUID=$(cat /proc/sys/kernel/random/uuid)
 HY2_PASS=$(openssl rand -base64 12)
 
@@ -82,7 +82,9 @@ cat > /etc/sing-box/config.json <<EOF
         "server_name": "$DOMAIN",
         "certificate_path": "$CERT_DIR/fullchain.pem",
         "key_path": "$CERT_DIR/privkey.pem"
-      }
+      },
+      "udp": true,
+      "tcp": true
     }
   ],
   "outbounds": [
