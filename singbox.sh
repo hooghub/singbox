@@ -1,14 +1,12 @@
 #!/bin/bash
-# Sing-box 高级一键部署脚本 (Let’s Encrypt + 无域名模式 + rev快捷 + 卸载)
-# Author: ChatGPT
+# Sing-box 高级一键部署脚本 (Let’s Encrypt + 无域名模式修正版)
 set -e
 
 echo "=================== Sing-box 高级部署 ==================="
 
-# 检查 root
 [[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
 
-# 安装依赖 (兼容各 Debian/Ubuntu)
+# 安装依赖 (兼容 Debian/Ubuntu)
 apt update -y
 apt install -y curl socat cron openssl qrencode netcat-openbsd || apt install -y netcat-traditional
 
@@ -17,8 +15,6 @@ if ! command -v acme.sh &>/dev/null; then
     curl https://get.acme.sh | sh
     source ~/.bashrc
 fi
-
-# 设置默认 CA 为 Let's Encrypt
 ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 
 # 安装 sing-box
@@ -26,27 +22,27 @@ if ! command -v sing-box &>/dev/null; then
     bash <(curl -fsSL https://sing-box.app/deb-install.sh)
 fi
 
-# 获取 VPS IP
-VPS_IP=$(curl -4s https://ip.sb)
+# 获取 VPS IPv4
+VPS_IP=$(curl -4s https://ip.sb | tr -d '[:space:]')
+if [[ -z "$VPS_IP" ]]; then
+    echo "[✖] 无法获取 VPS IP"
+    exit 1
+fi
 
-# 选择节点模式
 echo "请选择节点模式:"
 echo "1) 有域名 (自动申请 TLS)"
 echo "2) 无域名 (使用 VPS IP, 不启用 TLS)"
 read -rp "请输入 1 或 2: " NODE_MODE
 
-# 域名输入
 if [[ "$NODE_MODE" == "1" ]]; then
     read -rp "请输入你的域名 (例如: lg.lyn.edu.deal): " DOMAIN
-    # 检查域名解析
-    DOMAIN_IP=$(dig +short $DOMAIN)
+    DOMAIN_IP=$(dig +short $DOMAIN | head -n1)
     if [[ "$DOMAIN_IP" != "$VPS_IP" ]]; then
-        echo "[✖] 域名 $DOMAIN 未解析到本 VPS IP $VPS_IP"
+        echo "[✖] 域名未解析到本 VPS IP $VPS_IP"
         exit 1
     fi
 fi
 
-# 随机端口函数
 get_random_port() {
     while :; do
         PORT=$((RANDOM%50000+10000))
@@ -55,25 +51,20 @@ get_random_port() {
     echo $PORT
 }
 
-# VLESS TCP 端口
 read -rp "请输入 VLESS TCP 端口 (默认 443, 输入0随机): " VLESS_PORT
 [[ "$VLESS_PORT" == "0" || -z "$VLESS_PORT" ]] && VLESS_PORT=$(get_random_port)
 
-# HY2 UDP 端口
 read -rp "请输入 HY2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
 [[ "$HY2_PORT" == "0" || -z "$HY2_PORT" ]] && HY2_PORT=$(get_random_port)
 
-# UUID 和 HY2 密码
 UUID=$(cat /proc/sys/kernel/random/uuid)
 HY2_PASS=$(openssl rand -base64 12)
 
-# 配置文件路径
 CONFIG_FILE="/etc/sing-box/config.json"
-
-# TLS 证书目录
 CERT_DIR="/etc/ssl/$DOMAIN"
 mkdir -p "$CERT_DIR"
 
+TLS_JSON=""
 if [[ "$NODE_MODE" == "1" ]]; then
     echo ">>> 申请 Let's Encrypt TLS 证书"
     ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
@@ -81,29 +72,16 @@ if [[ "$NODE_MODE" == "1" ]]; then
       --key-file "$CERT_DIR/privkey.pem" \
       --fullchain-file "$CERT_DIR/fullchain.pem" --force
     TLS_JSON=",\"tls\":{\"enabled\":true,\"server_name\":\"$DOMAIN\",\"certificate_path\":\"$CERT_DIR/fullchain.pem\",\"key_path\":\"$CERT_DIR/privkey.pem\"}"
-else
-    TLS_JSON=""
-    DOMAIN=""
 fi
 
-# 生成 sing-box 配置
+# 生成配置文件
 if [[ "$NODE_MODE" == "1" ]]; then
 cat > $CONFIG_FILE <<EOF
 {
-  "log": {"level":"info"},
+  "log":{"level":"info"},
   "inbounds":[
-    {
-      "type":"vless",
-      "listen":"0.0.0.0",
-      "listen_port":$VLESS_PORT,
-      "users":[{"uuid":"$UUID","flow":"xtls-rprx-vision"}]$TLS_JSON
-    },
-    {
-      "type":"hysteria2",
-      "listen":"0.0.0.0",
-      "listen_port":$HY2_PORT,
-      "users":[{"password":"$HY2_PASS"}]$TLS_JSON
-    }
+    {"type":"vless","listen":"0.0.0.0","listen_port":$VLESS_PORT,"users":[{"uuid":"$UUID","flow":"xtls-rprx-vision"}]$TLS_JSON},
+    {"type":"hysteria2","listen":"0.0.0.0","listen_port":$HY2_PORT,"users":[{"password":"$HY2_PASS"}]$TLS_JSON}
   ],
   "outbounds":[{"type":"direct"}]
 }
@@ -111,20 +89,10 @@ EOF
 else
 cat > $CONFIG_FILE <<EOF
 {
-  "log": {"level":"info"},
+  "log":{"level":"info"},
   "inbounds":[
-    {
-      "type":"vless",
-      "listen":"0.0.0.0",
-      "listen_port":$VLESS_PORT,
-      "users":[{"uuid":"$UUID"}]
-    },
-    {
-      "type":"hysteria2",
-      "listen":"0.0.0.0",
-      "listen_port":$HY2_PORT,
-      "users":[{"password":"$HY2_PASS"}]
-    }
+    {"type":"vless","listen":"0.0.0.0","listen_port":$VLESS_PORT,"users":[{"uuid":"$UUID"}]},
+    {"type":"hysteria2","listen":"0.0.0.0","listen_port":$HY2_PORT,"users":[{"password":"$HY2_PASS"}]}
   ],
   "outbounds":[{"type":"direct"}]
 }
@@ -136,18 +104,13 @@ systemctl enable sing-box
 systemctl restart sing-box
 sleep 5
 
-# 端口自检函数
-check_tcp_port() {
-    nc -zv 127.0.0.1 $1 &>/dev/null && echo "[✔] VLESS TCP $1 已监听" || echo "[✖] VLESS TCP $1 未监听"
-}
-check_udp_port() {
-    timeout 2 bash -c "echo > /dev/udp/127.0.0.1/$1" &>/dev/null && echo "[✔] HY2 UDP $1 已监听" || echo "[✖] HY2 UDP $1 未监听"
-}
+# 端口检查
+check_tcp() { nc -zv 127.0.0.1 $1 &>/dev/null && echo "[✔] VLESS TCP $1 已监听" || echo "[✖] VLESS TCP $1 未监听"; }
+check_udp() { timeout 2 bash -c "echo > /dev/udp/127.0.0.1/$1" &>/dev/null && echo "[✔] HY2 UDP $1 已监听" || echo "[✖] HY2 UDP $1 未监听"; }
 
-# 检查端口
 echo
-check_tcp_port $VLESS_PORT
-check_udp_port $HY2_PORT
+check_tcp $VLESS_PORT
+check_udp $HY2_PORT
 
 # 节点 URI
 if [[ "$NODE_MODE" == "1" ]]; then
@@ -158,11 +121,11 @@ VLESS_URI="vless://$UUID@$VPS_IP:$VLESS_PORT?encryption=none&type=tcp#VLESS-$VPS
 HY2_URI="hysteria2://hy2user:$HY2_PASS@$VPS_IP:$HY2_PORT?insecure=1#HY2-$VPS_IP"
 fi
 
-# 生成 QR 码
+# QR 码
 echo "$VLESS_URI" | qrencode -o /root/vless_qr.png
 echo "$HY2_URI" | qrencode -o /root/hy2_qr.png
 
-# 输出节点信息和二维码
+# 输出
 echo
 echo "=================== 节点信息 ==================="
 echo -e "VLESS 节点:\n$VLESS_URI"
@@ -184,10 +147,10 @@ echo "/root/vless_qr.png"
 echo "/root/hy2_qr.png"
 EOF
 chmod +x /root/show_singbox_nodes.sh
-echo "快捷显示节点: 输入 rev"
 ln -sf /root/show_singbox_nodes.sh /usr/local/bin/rev
+echo "快捷显示节点: 输入 rev"
 
-# 创建卸载脚本
+# 卸载脚本
 cat > ./uninstall_singbox.sh <<'EOF'
 #!/bin/bash
 systemctl stop sing-box
@@ -202,4 +165,4 @@ EOF
 chmod +x ./uninstall_singbox.sh
 echo "卸载: 输入 ./uninstall_singbox.sh"
 
-echo "=================== 部署完成 =================
+echo "=================== 部署完成 ==================="
