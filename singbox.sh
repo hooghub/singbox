@@ -1,8 +1,46 @@
 #!/bin/bash
 # Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt)
+# 支持 --show 参数仅显示节点信息
 # Author: ChatGPT
 
 set -e
+
+SHOW_ONLY=0
+if [[ "$1" == "--show" ]]; then
+    SHOW_ONLY=1
+fi
+
+# 节点订阅文件
+SUB_FILE="/root/singbox_nodes.json"
+
+show_nodes() {
+    if [[ ! -f "$SUB_FILE" ]]; then
+        echo "[✖] 节点文件 $SUB_FILE 不存在，请先部署节点。"
+        exit 1
+    fi
+    # 读取节点
+    VLESS_URI=$(jq -r '.vless' "$SUB_FILE")
+    HY2_URI=$(jq -r '.hysteria2' "$SUB_FILE")
+
+    echo -e "\n=================== 节点信息 ==================="
+    echo -e "VLESS 节点:\n$VLESS_URI"
+    echo -e "HY2 节点:\n$HY2_URI"
+
+    # 显示 QR 码
+    echo -e "\nVLESS QR:"
+    echo "$VLESS_URI" | qrencode -t ansiutf8
+    echo -e "\nHY2 QR:"
+    echo "$HY2_URI" | qrencode -t ansiutf8
+
+    echo -e "\n=================== 订阅文件内容 ==================="
+    cat "$SUB_FILE"
+    echo -e "\n订阅文件路径：$SUB_FILE"
+    exit 0
+}
+
+if [[ $SHOW_ONLY -eq 1 ]]; then
+    show_nodes
+fi
 
 echo "=================== Sing-box 高级部署 (Let’s Encrypt) ==================="
 
@@ -11,7 +49,7 @@ echo "=================== Sing-box 高级部署 (Let’s Encrypt) ==============
 
 # 安装依赖
 apt update -y
-apt install -y curl socat cron openssl qrencode
+apt install -y curl socat cron openssl qrencode dnsutils jq
 
 # 安装 acme.sh
 if ! command -v acme.sh &>/dev/null; then
@@ -29,6 +67,24 @@ fi
 
 # 用户输入域名
 read -rp "请输入你的域名 (例如: lg.lyn.edu.deal): " DOMAIN
+
+# 检查域名解析
+echo ">>> 检查域名解析..."
+SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
+DOMAIN_IP=$(dig +short A "$DOMAIN" | tail -n1)
+
+if [[ -z "$DOMAIN_IP" ]]; then
+    echo "[✖] 域名 $DOMAIN 未解析，请先正确配置 DNS"
+    exit 1
+fi
+
+if [[ "$SERVER_IP" != "$DOMAIN_IP" ]]; then
+    echo "[✖] 域名 $DOMAIN 解析到 $DOMAIN_IP，但本机 IP 是 $SERVER_IP"
+    echo "请先将域名解析到当前 VPS，再运行本脚本。"
+    exit 1
+fi
+
+echo "[✔] 域名 $DOMAIN 已正确解析到当前 VPS ($SERVER_IP)"
 
 # 随机端口函数
 get_random_port() {
@@ -65,8 +121,8 @@ echo ">>> 申请 Let's Encrypt TLS 证书"
   --key-file       "$CERT_DIR/privkey.pem" \
   --fullchain-file "$CERT_DIR/fullchain.pem" --force
 
-# 添加证书自动续签任务
-(crontab -l 2>/dev/null; echo "0 3 * * * ~/.acme.sh/acme.sh --cron --home ~/.acme.sh > /dev/null && systemctl restart sing-box") | crontab -
+# 添加证书自动续签任务（每30天执行一次）
+(crontab -l 2>/dev/null | grep -v 'acme.sh'; echo "0 0 */30 * * ~/.acme.sh/acme.sh --cron --home ~/.acme.sh > /dev/null && systemctl restart sing-box") | crontab -
 
 # 生成 sing-box 配置
 cat > /etc/sing-box/config.json <<EOF
@@ -89,7 +145,7 @@ cat > /etc/sing-box/config.json <<EOF
       "type": "hysteria2",
       "listen": "0.0.0.0",
       "listen_port": $HY2_PORT,
-      "users": [{ "name": "hy2user", "password": "$HY2_PASS" }],
+      "users": [{ "password": "$HY2_PASS" }],
       "tls": {
         "enabled": true,
         "server_name": "$DOMAIN",
@@ -112,31 +168,31 @@ echo
 [[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
 [[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] HY2 UDP $HY2_PORT 已监听" || echo "[✖] HY2 UDP $HY2_PORT 未监听"
 
-# 输出节点信息
+# 输出节点信息（换行显示）
 VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&flow=xtls-rprx-vision#VLESS-$DOMAIN"
-HY2_URI="hysteria2://hy2user:$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
+HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
 
-echo
-echo "=================== 节点信息 ==================="
-echo "VLESS 节点: $VLESS_URI"
-echo "HY2 节点: $HY2_URI"
+echo -e "\n=================== 节点信息 ==================="
+echo -e "VLESS 节点:\n$VLESS_URI"
+echo -e "HY2 节点:\n$HY2_URI"
 
-# 生成 QR 码文件
-echo "$VLESS_URI" | qrencode -o /root/vless_qr.png
-echo "$HY2_URI" | qrencode -o /root/hy2_qr.png
-echo "QR 码已生成：/root/vless_qr.png 和 /root/hy2_qr.png"
+# 生成并显示 QR 码
+echo -e "\nVLESS QR:"
+echo "$VLESS_URI" | qrencode -t ansiutf8
+echo -e "\nHY2 QR:"
+echo "$HY2_URI" | qrencode -t ansiutf8
 
 # 生成订阅 JSON 文件
-SUB_FILE="/root/singbox_nodes.json"
 cat > $SUB_FILE <<EOF
 {
   "vless": "$VLESS_URI",
   "hysteria2": "$HY2_URI"
 }
 EOF
-echo "订阅文件生成：$SUB_FILE"
 
-echo "=================== 部署完成 ==================="
-echo "VLESS QR: /root/vless_qr.png"
-echo "HY2 QR: /root/hy2_qr.png"
-echo "订阅文件: $SUB_FILE"
+# 在屏幕显示订阅文件内容
+echo -e "\n=================== 订阅文件内容 ==================="
+cat "$SUB_FILE"
+echo -e "\n订阅文件已保存到：$SUB_FILE"
+
+echo -e "\n=================== 部署完成 ==================="
