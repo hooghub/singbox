@@ -1,16 +1,15 @@
 #!/bin/bash
 # Sing-box 高级部署脚本 (VLESS + HY2 + 自动端口 + 二维码 + rev 快捷 + 卸载)
 # 支持有域名 (TLS + xtls) / 无域名 (普通 TCP/UDP)
+# 修复 EOF 问题
 # Author: ChatGPT
 
 set -e
 
 echo "=================== Sing-box 部署 ==================="
 
-# 检查 root
 [[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
 
-# 安装依赖
 apt update -y
 apt install -y curl socat cron openssl qrencode
 
@@ -25,7 +24,6 @@ if ! command -v sing-box &>/dev/null; then
     bash <(curl -fsSL https://sing-box.app/deb-install.sh)
 fi
 
-# 随机端口函数
 get_random_port() {
     while :; do
         PORT=$((RANDOM%50000+10000))
@@ -34,7 +32,6 @@ get_random_port() {
     echo $PORT
 }
 
-# 用户选择模式
 echo "请选择节点模式:"
 echo "1) 有域名 (自动申请 TLS)"
 echo "2) 无域名 (使用 VPS IP, 不启用 TLS)"
@@ -44,23 +41,19 @@ if [[ "$MODE" == "1" ]]; then
     read -rp "请输入你的域名: " DOMAIN
 fi
 
-# 输入端口
 read -rp "请输入 VLESS TCP 端口 (默认 443, 输入0随机): " VLESS_PORT
 [[ "$VLESS_PORT" == "0" || -z "$VLESS_PORT" ]] && VLESS_PORT=$(get_random_port)
 
 read -rp "请输入 HY2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
 [[ "$HY2_PORT" == "0" || -z "$HY2_PORT" ]] && HY2_PORT=$(get_random_port)
 
-# UUID 和 HY2 密码
 UUID=$(cat /proc/sys/kernel/random/uuid)
 HY2_PASS=$(openssl rand -base64 12)
 
-# TLS 配置
 if [[ "$MODE" == "1" ]]; then
     CERT_DIR="/etc/ssl/$DOMAIN"
     mkdir -p "$CERT_DIR"
 
-    # 检查域名解析
     VPS_IP=$(curl -s https://api.ipify.org)
     DOMAIN_IP=$(dig +short "$DOMAIN" | tail -n1)
     if [[ "$VPS_IP" != "$DOMAIN_IP" ]]; then
@@ -68,18 +61,15 @@ if [[ "$MODE" == "1" ]]; then
         exit 1
     fi
 
-    echo ">>> 申请 TLS"
     ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
     ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
     ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
       --key-file "$CERT_DIR/privkey.pem" \
       --fullchain-file "$CERT_DIR/fullchain.pem" --force
 
-    # 30天续签
     (crontab -l 2>/dev/null; echo "0 3 */30 * * ~/.acme.sh/acme.sh --cron --home ~/.acme.sh > /dev/null && systemctl restart sing-box") | crontab -
 fi
 
-# 配置文件生成
 CONFIG_FILE="/etc/sing-box/config.json"
 mkdir -p $(dirname "$CONFIG_FILE")
 
@@ -143,17 +133,14 @@ cat > $CONFIG_FILE <<EOF
 EOF
 fi
 
-# 启动 sing-box
 systemctl enable sing-box
 systemctl restart sing-box
 sleep 3
 
-# 检查端口
 echo
 [[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
 [[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] HY2 UDP $HY2_PORT 已监听" || echo "[✖] HY2 UDP $HY2_PORT 未监听"
 
-# 生成节点 URI
 if [[ "$MODE" == "1" ]]; then
     VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&flow=xtls-rprx-vision#VLESS-$DOMAIN"
     HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
@@ -195,5 +182,6 @@ echo "Sing-box 已卸载"
 EOF
 chmod +x /root/uninstall_singbox.sh
 
-# 输出信息
-echo "================
+echo "=================== 部署完成 ==================="
+echo "VLESS QR: /root/vless_qr.png"
+echo "HY2 QR: /root/h
