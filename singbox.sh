@@ -75,8 +75,8 @@ cat > "$CONFIG_FILE" <<EOF
       "type": "vless",
       "listen": "0.0.0.0",
       "listen_port": $VLESS_PORT,
-      "users": [{"uuid": "$UUID","flow":"xtls-rprx-vision"}],
-      "tls": {"enabled": true,"server_name": "$DOMAIN","certificate_path":"$CERT_DIR/fullchain.pem","key_path":"$CERT_DIR/privkey.pem"}
+      "users": [{"uuid":"$UUID","flow":"xtls-rprx-vision"}],
+      "tls": {"enabled": true,"server_name":"$DOMAIN","certificate_path":"$CERT_DIR/fullchain.pem","key_path":"$CERT_DIR/privkey.pem"}
     },
     {
       "type": "hysteria2",
@@ -134,28 +134,58 @@ echo "$VLESS_URI" | qrencode -o /root/vless_qr.png
 echo "$HY2_URI" | qrencode -o /root/hy2_qr.png
 
 # 节点显示脚本
-cat > /root/show_singbox_nodes.sh <<'EOF'
+cat > /root/show_singbox_nodes.sh <<'EON'
 #!/bin/bash
+VLESS_URI='"$VLESS_URI"'
+HY2_URI='"$HY2_URI"'
+VLESS_PORT='"$VLESS_PORT"'
+HY2_PORT='"$HY2_PORT"'
 echo "=================== 节点信息 ==================="
-echo -e "VLESS 节点:\n'"$VLESS_URI"'"
-echo -e "HY2 节点:\n'"$HY2_URI"'"
+echo -e "VLESS 节点:\n$VLESS_URI"
+echo -e "HY2 节点:\n$HY2_URI"
 echo "二维码文件:"
 echo "/root/vless_qr.png"
 echo "/root/hy2_qr.png"
 echo
 echo "=================== 端口自检 ==================="
 check_ports() {
-    if [[ -n "$(ss -tulnp | grep '$VLESS_PORT')" ]]; then
+    if [[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]]; then
         echo "[✔] VLESS TCP $VLESS_PORT 已监听"
     else
         echo "[✖] VLESS TCP $VLESS_PORT 未监听"
     fi
-    if [[ -n "$(ss -ulnp | grep '$HY2_PORT')" ]]; then
+    if [[ -n "$(ss -ulnp | grep $HY2_PORT)" ]]; then
         echo "[✔] HY2 UDP $HY2_PORT 已监听"
     else
         echo "[✖] HY2 UDP $HY2_PORT 未监听"
     fi
 }
 check_ports
-EOF
-chmod +x /root/sh
+EON
+
+chmod +x /root/show_singbox_nodes.sh
+
+# rev 别名
+grep -qxF 'alias rev="/root/show_singbox_nodes.sh"' ~/.bashrc || echo 'alias rev="/root/show_singbox_nodes.sh"' >> ~/.bashrc
+source ~/.bashrc
+
+# 卸载脚本
+cat > /root/uninstall_singbox.sh <<'EON'
+#!/bin/bash
+systemctl stop sing-box
+systemctl disable sing-box
+rm -f /etc/sing-box/config.json
+rm -f /root/vless_qr.png /root/hy2_qr.png /root/show_singbox_nodes.sh
+sed -i '/alias rev=\/root\/show_singbox_nodes.sh/d' ~/.bashrc
+echo "Sing-box 已卸载"
+EON
+chmod +x /root/uninstall_singbox.sh
+
+echo "=================== 部署完成 ==================="
+echo "VLESS QR: /root/vless_qr.png"
+echo "HY2 QR: /root/hy2_qr.png"
+echo "快捷显示节点: 输入 rev"
+echo "卸载: 输入 ./uninstall_singbox.sh"
+
+# 自动端口自检
+/root/show_singbox_nodes.sh
