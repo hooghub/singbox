@@ -1,6 +1,5 @@
 #!/bin/bash
-# Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR显示 + Let's Encrypt)
-# 支持部署完成后 review 节点信息
+# Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR显示 + Let's Encrypt + rev别名)
 # Author: ChatGPT
 
 set -e
@@ -10,18 +9,17 @@ show_nodes() {
     echo -e "VLESS 节点:\n$VLESS_URI"
     echo -e "HY2 节点:\n$HY2_URI"
 
-    # 显示 QR 码
+    # 终端显示二维码
     echo -e "\nVLESS QR:"
     echo "$VLESS_URI" | qrencode -t ansiutf8
     echo -e "\nHY2 QR:"
     echo "$HY2_URI" | qrencode -t ansiutf8
-}
 
-# =================== 支持 --show 参数，仅显示节点 ===================
-if [[ "$1" == "--show" ]]; then
-    show_nodes
-    exit 0
-fi
+    # 生成二维码文件
+    echo "$VLESS_URI" | qrencode -o /root/vless_qr.png
+    echo "$HY2_URI" | qrencode -o /root/hy2_qr.png
+    echo -e "\n二维码文件已生成：/root/vless_qr.png 和 /root/hy2_qr.png"
+}
 
 echo "=================== Sing-box 高级部署 (Let’s Encrypt) ==================="
 
@@ -139,6 +137,42 @@ cat > /etc/sing-box/config.json <<EOF
 }
 EOF
 
+# 保存节点信息到环境文件
+VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&flow=xtls-rprx-vision#VLESS-$DOMAIN"
+HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
+cat > /root/singbox_nodes.env <<EOF
+VLESS_URI="$VLESS_URI"
+HY2_URI="$HY2_URI"
+EOF
+
+# 创建显示节点快捷脚本（增强版，显示终端二维码 + 生成二维码文件）
+cat > /root/show_singbox_nodes.sh <<'EOF'
+#!/bin/bash
+source /root/singbox_nodes.env
+
+echo -e "\n=================== 节点信息 ==================="
+echo -e "VLESS 节点:\n$VLESS_URI"
+echo -e "HY2 节点:\n$HY2_URI"
+
+# 终端显示二维码
+echo -e "\nVLESS QR:"
+echo "$VLESS_URI" | qrencode -t ansiutf8
+echo -e "\nHY2 QR:"
+echo "$HY2_URI" | qrencode -t ansiutf8
+
+# 生成二维码文件
+echo "$VLESS_URI" | qrencode -o /root/vless_qr.png
+echo "$HY2_URI" | qrencode -o /root/hy2_qr.png
+echo -e "\n二维码文件已生成：/root/vless_qr.png 和 /root/hy2_qr.png"
+EOF
+chmod +x /root/show_singbox_nodes.sh
+
+# 添加快捷别名 rev
+if ! grep -q "alias rev=" ~/.bashrc; then
+    echo "alias rev='/root/show_singbox_nodes.sh'" >> ~/.bashrc
+    echo "快捷别名已添加：输入 rev 即可显示节点信息和二维码"
+fi
+
 # 启动 sing-box
 systemctl enable sing-box
 systemctl restart sing-box
@@ -149,20 +183,7 @@ echo
 [[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
 [[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] HY2 UDP $HY2_PORT 已监听" || echo "[✖] HY2 UDP $HY2_PORT 未监听"
 
-# 输出节点信息（换行显示）
-VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&flow=xtls-rprx-vision#VLESS-$DOMAIN"
-HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
-
 # 第一次显示节点信息
 show_nodes
 
-# =================== 部署完成后 review 节点信息 ===================
-while true; do
-    read -rp "输入 review 查看节点信息，或者直接按回车退出: " REPLY
-    if [[ "$REPLY" == "review" ]]; then
-        show_nodes
-    else
-        echo "退出。"
-        break
-    fi
-done
+echo -e "\n部署完成！以后只需输入 rev 就可以显示节点信息和二维码。二维码文件也会自动生成。"
