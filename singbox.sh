@@ -1,7 +1,5 @@
 #!/bin/bash
-# Sing-box 高级部署脚本 (VLESS + HY2 + 自动端口 + 二维码 + rev 快捷 + 卸载)
-# 支持有域名 (TLS + xtls) / 无域名 (普通 TCP/UDP)
-# 修复 EOF 问题
+# Sing-box 高级部署脚本 (VLESS + HY2 + 自动端口 + 二维码 + rev 快捷 + 卸载 + 端口自检)
 # Author: ChatGPT
 
 set -e
@@ -11,7 +9,7 @@ echo "=================== Sing-box 部署 ==================="
 [[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
 
 apt update -y
-apt install -y curl socat cron openssl qrencode
+apt install -y curl socat cron openssl qrencode dnsutils
 
 # 安装 acme.sh
 if ! command -v acme.sh &>/dev/null; then
@@ -137,9 +135,22 @@ systemctl enable sing-box
 systemctl restart sing-box
 sleep 3
 
-echo
-[[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
-[[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] HY2 UDP $HY2_PORT 已监听" || echo "[✖] HY2 UDP $HY2_PORT 未监听"
+# 自检端口监听
+check_ports() {
+    echo
+    echo "=================== 端口自检 ==================="
+    if [[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]]; then
+        echo "[✔] VLESS TCP $VLESS_PORT 已监听"
+    else
+        echo "[✖] VLESS TCP $VLESS_PORT 未监听，可能防火墙或端口被占用"
+    fi
+
+    if [[ -n "$(ss -ulnp | grep $HY2_PORT)" ]]; then
+        echo "[✔] HY2 UDP $HY2_PORT 已监听"
+    else
+        echo "[✖] HY2 UDP $HY2_PORT 未监听，可能防火墙或端口被占用"
+    fi
+}
 
 if [[ "$MODE" == "1" ]]; then
     VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&flow=xtls-rprx-vision#VLESS-$DOMAIN"
@@ -153,20 +164,35 @@ fi
 echo "$VLESS_URI" | qrencode -o /root/vless_qr.png
 echo "$HY2_URI" | qrencode -o /root/hy2_qr.png
 
-# 节点信息脚本
+# 节点显示脚本
 cat > /root/show_singbox_nodes.sh <<EOF
 #!/bin/bash
 echo "=================== 节点信息 ==================="
-echo -e "VLESS 节点:\n$VLESS_URI"
-echo -e "HY2 节点:\n$HY2_URI"
+echo -e "VLESS 节点:\\n$VLESS_URI"
+echo -e "HY2 节点:\\n$HY2_URI"
 echo "二维码文件:"
 echo "/root/vless_qr.png"
 echo "/root/hy2_qr.png"
+echo
+echo "=================== 端口自检 ==================="
+check_ports() {
+    if [[ -n "\$(ss -tulnp | grep $VLESS_PORT)" ]]; then
+        echo "[✔] VLESS TCP $VLESS_PORT 已监听"
+    else
+        echo "[✖] VLESS TCP $VLESS_PORT 未监听"
+    fi
+    if [[ -n "\$(ss -ulnp | grep $HY2_PORT)" ]]; then
+        echo "[✔] HY2 UDP $HY2_PORT 已监听"
+    else
+        echo "[✖] HY2 UDP $HY2_PORT 未监听"
+    fi
+}
+check_ports
 EOF
 chmod +x /root/show_singbox_nodes.sh
 
-# rev 别名
-echo 'alias rev="/root/show_singbox_nodes.sh"' >> ~/.bashrc
+# rev 快捷别名
+grep -qxF 'alias rev="/root/show_singbox_nodes.sh"' ~/.bashrc || echo 'alias rev="/root/show_singbox_nodes.sh"' >> ~/.bashrc
 source ~/.bashrc
 
 # 卸载脚本
@@ -176,12 +202,4 @@ systemctl stop sing-box
 systemctl disable sing-box
 rm -f /etc/sing-box/config.json
 rm -f /root/vless_qr.png /root/hy2_qr.png /root/show_singbox_nodes.sh
-sed -i '/alias rev=\/root\/show_singbox_nodes.sh/d' ~/.bashrc
-rm -f /root/uninstall_singbox.sh
-echo "Sing-box 已卸载"
-EOF
-chmod +x /root/uninstall_singbox.sh
-
-echo "=================== 部署完成 ==================="
-echo "VLESS QR: /root/vless_qr.png"
-echo "HY2 QR: /root/h
+sed -i '/alias rev=\/root\/show_singbox
