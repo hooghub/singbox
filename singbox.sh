@@ -1,12 +1,12 @@
 #!/bin/bash
-# Sing-box 最终一键部署脚本 (VLESS + HY2 + 随机端口 + 无域名模式)
+# Sing-box 无域名模式部署脚本 (VLESS TCP + HY2 UDP)
 # Author: ChatGPT
 # 特性:
-# 1. 支持无域名模式（TLS关闭）
-# 2. VLESS TCP + HY2 UDP 随机端口
+# 1. TLS关闭，使用VPS IP
+# 2. 随机端口生成
 # 3. 自动生成二维码
 # 4. rev 快捷显示节点信息
-# 5. 启动失败提示
+# 5. systemd 启动，启动失败提示
 
 set -e
 
@@ -15,7 +15,7 @@ set -e
 
 # 安装依赖
 apt update -y
-apt install -y curl socat cron openssl qrencode netcat-openbsd jq dnsutils
+apt install -y curl socat qrencode netcat-openbsd jq
 
 # 安装 sing-box
 if ! command -v sing-box &>/dev/null; then
@@ -69,9 +69,11 @@ cat > /etc/sing-box/config.json <<EOF
 }
 EOF
 
-# 创建节点信息
+# 节点 URI
 VLESS_URI="vless://$UUID@$IP:$VLESS_PORT?encryption=none&type=tcp#VLESS-noTLS"
 HY2_URI="hysteria2://$HY2_PASS@$IP:$HY2_PORT?insecure=1#HY2-noTLS"
+
+# 保存节点信息
 cat > /root/singbox_nodes.env <<EOF
 VLESS_URI="$VLESS_URI"
 HY2_URI="$HY2_URI"
@@ -118,7 +120,6 @@ EOF
 systemctl daemon-reload
 systemctl enable sing-box
 systemctl restart sing-box
-
 sleep 3
 
 # 检查端口监听
@@ -131,7 +132,6 @@ echo -e "\n=================== 端口自检 ==================="
 echo "$VLESS_STATUS VLESS TCP $VLESS_PORT"
 echo "$HY2_STATUS HY2 UDP $HY2_PORT"
 
-# 提示服务启动失败
 if [[ "$VLESS_STATUS" == "[✖]" || "$HY2_STATUS" == "[✖]" ]]; then
     echo -e "\n[⚠] Sing-box 启动失败，请检查端口是否被占用或配置是否正确"
 fi
