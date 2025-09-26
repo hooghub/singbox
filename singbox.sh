@@ -1,6 +1,6 @@
 #!/bin/bash
-# Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt)
-# Author: chis
+# Sing-box 高级一键部署脚本 (VLESS TCP+TLS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt + 开机自启)
+# Author: chis (修改 by ChatGPT)
 
 set -e
 
@@ -86,7 +86,7 @@ echo ">>> 申请 Let's Encrypt TLS 证书"
 # 添加证书自动续签任务（每30天运行一次）
 (crontab -l 2>/dev/null | grep -v 'acme.sh'; echo "0 0 */30 * * ~/.acme.sh/acme.sh --cron --home ~/.acme.sh > /dev/null && systemctl restart sing-box") | crontab -
 
-# 生成 sing-box 配置
+# 生成 sing-box 配置 (VLESS TCP+TLS)
 cat > /etc/sing-box/config.json <<EOF
 {
   "log": { "level": "info" },
@@ -95,7 +95,7 @@ cat > /etc/sing-box/config.json <<EOF
       "type": "vless",
       "listen": "0.0.0.0",
       "listen_port": $VLESS_PORT,
-      "users": [{ "uuid": "$UUID", "flow": "xtls-rprx-vision" }],
+      "users": [{ "uuid": "$UUID" }],
       "tls": {
         "enabled": true,
         "server_name": "$DOMAIN",
@@ -120,28 +120,46 @@ cat > /etc/sing-box/config.json <<EOF
 }
 EOF
 
-# 启动 sing-box
+# 启动 sing-box 并设置开机自启
 systemctl enable sing-box
 systemctl restart sing-box
 sleep 3
+
+# 创建 systemd 开机自启脚本（确保网络就绪后启动 sing-box）
+cat > /etc/systemd/system/singbox-startup.service <<EOF
+[Unit]
+Description=Sing-box auto start after network is up
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart sing-box
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable singbox-startup.service
 
 # 检查端口监听
 echo
 [[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
 [[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] HY2 UDP $HY2_PORT 已监听" || echo "[✖] HY2 UDP $HY2_PORT 未监听"
 
-# 输出节点信息（换行显示）
-VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&flow=xtls-rprx-vision#VLESS-$DOMAIN"
+# 输出 VLESS 节点信息（兼容 V2RayN/V2RayNG）
+VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp#VLESS-$DOMAIN"
 HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
 
-echo -e "\n=================== 节点信息 ==================="
-echo -e "VLESS 节点:\n$VLESS_URI"
-echo -e "HY2 节点:\n$HY2_URI"
-
-# 生成并显示 QR 码
-echo -e "\nVLESS QR:"
+echo -e "\n=================== VLESS 节点 ==================="
+echo -e "$VLESS_URI\n"
+echo "VLESS QR（可直接用 V2RayN/V2RayNG 扫码导入）："
 echo "$VLESS_URI" | qrencode -t ansiutf8
-echo -e "\nHY2 QR:"
+
+echo -e "\n=================== HY2 节点 ==================="
+echo -e "$HY2_URI\n"
+echo "HY2 QR："
 echo "$HY2_URI" | qrencode -t ansiutf8
 
 # 生成订阅 JSON 文件
@@ -153,7 +171,6 @@ cat > $SUB_FILE <<EOF
 }
 EOF
 
-# 在屏幕显示订阅文件内容
 echo -e "\n=================== 订阅文件内容 ==================="
 cat $SUB_FILE
 echo -e "\n订阅文件已保存到：$SUB_FILE"
