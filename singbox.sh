@@ -1,26 +1,37 @@
 #!/bin/bash
 # Sing-box 一键部署脚本 (VLESS TCP+TLS + HY2)
 # 支持 域名 (Let's Encrypt) / 无域名 (自签证书)
-# 最新 sing-box 配置，去掉 decryption
+# 完全可 curl -o script.sh && bash script.sh 执行
 # Author: ChatGPT 改写版
 
 set -e
 
-echo "=================== Sing-box 部署脚本 ==================="
+echo "=================== Sing-box 部署前环境检查 ==================="
 
 # 检查 root
 [[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
+echo "[✔] Root 权限 OK"
 
-# 环境检查
-echo ">>> 检查系统环境..."
-command -v curl >/dev/null || { echo "curl 未安装，正在安装..."; apt update -y && apt install -y curl; }
-command -v socat >/dev/null || { echo "socat 未安装，正在安装..."; apt install -y socat; }
-command -v openssl >/dev/null || { echo "openssl 未安装，正在安装..."; apt install -y openssl; }
-command -v qrencode >/dev/null || { echo "qrencode 未安装，正在安装..."; apt install -y qrencode; }
-command -v dig >/dev/null || { echo "dnsutils 未安装，正在安装..."; apt install -y dnsutils; }
-command -v systemctl >/dev/null || { echo "systemd 未安装或不可用，退出"; exit 1; }
+# 公网 IP
+SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
+echo "[✔] 检测到公网 IP: $SERVER_IP"
 
-echo "环境检查完成 ✅"
+# 检查依赖
+for cmd in curl ss openssl qrencode dig systemctl bash socat; do
+    command -v $cmd >/dev/null 2>&1 && echo "[✔] 命令存在: $cmd" || { echo "[✖] 命令 $cmd 不存在，正在安装..."; apt update -y && apt install -y $cmd; }
+done
+
+# 检查常用端口
+for port in 80 443; do
+    if ss -tuln | grep -q ":$port "; then
+        echo "[✖] 端口 $port 已占用，请先释放"
+        exit 1
+    else
+        echo "[✔] 端口 $port 空闲"
+    fi
+done
+
+echo -e "\n环境检查完成 ✅"
 read -rp "确认继续执行部署吗？(y/N): " CONFIRM
 [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && exit 0
 
@@ -36,8 +47,6 @@ if ! command -v sing-box &>/dev/null; then
     bash <(curl -fsSL https://sing-box.app/deb-install.sh)
 fi
 
-# 公网 IP
-SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
 CERT_DIR="/etc/ssl/sing-box"
 mkdir -p "$CERT_DIR"
 
@@ -49,34 +58,27 @@ if [[ "$MODE" == "1" ]]; then
     [[ -z "$DOMAIN" ]] && echo "域名不能为空" && exit 1
     USE_DOMAIN=true
 
-    # 检查域名解析
     DOMAIN_IP=$(dig +short A "$DOMAIN" | tail -n1)
-    if [[ -z "$DOMAIN_IP" ]]; then
-        echo "[✖] 域名未解析"
-        exit 1
-    fi
-    if [[ "$DOMAIN_IP" != "$SERVER_IP" ]]; then
-        echo "[✖] 域名解析到 $DOMAIN_IP，但本机 IP 是 $SERVER_IP"
-        exit 1
-    fi
+    [[ -z "$DOMAIN_IP" ]] && echo "[✖] 域名未解析" && exit 1
+    [[ "$DOMAIN_IP" != "$SERVER_IP" ]] && echo "[✖] 域名解析到 $DOMAIN_IP，但本机 IP 是 $SERVER_IP" && exit 1
     echo "[✔] 域名解析正确"
 
     # 安装 acme.sh
     if ! command -v acme.sh &>/dev/null; then
         echo ">>> 安装 acme.sh ..."
-        curl https://get.acme.sh | sh
+        curl https://get.acme.sh | bash
         source ~/.bashrc || true
     fi
     /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 
-    # 申请证书
+    echo ">>> 申请 Let's Encrypt TLS 证书"
     /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
     /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
         --key-file "$CERT_DIR/privkey.pem" \
         --fullchain-file "$CERT_DIR/fullchain.pem" --force
 
     # 自动续签 systemd
-    cat >/etc/systemd/system/acme-renew.service <<EOF
+    cat >/etc/systemd/system/acme-renew.service <<'EOF'
 [Unit]
 Description=Renew Let's Encrypt certificates via acme.sh
 [Service]
@@ -85,7 +87,7 @@ ExecStart=/root/.acme.sh/acme.sh --cron --home /root/.acme.sh --force
 ExecStartPost=/bin/systemctl reload-or-restart sing-box
 EOF
 
-    cat >/etc/systemd/system/acme-renew.timer <<EOF
+    cat >/etc/systemd/system/acme-renew.timer <<'EOF'
 [Unit]
 Description=Run acme-renew.service daily
 [Timer]
@@ -127,10 +129,9 @@ read -rp "请输入 HY2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
 UUID=$(cat /proc/sys/kernel/random/uuid)
 HY2_PASS=$(openssl rand -base64 12)
 
-# 修复证书权限
 chmod 644 "$CERT_DIR"/*.pem
 
-# 生成 sing-box 配置 JSON
+# 生成 sing-box 配置 JSON (去掉 decryption)
 cat >/etc/sing-box/config.json <<EOF
 {
 "log": { "level": "info" },
