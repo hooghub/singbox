@@ -1,13 +1,13 @@
 #!/bin/bash
-# Sing-box 一键部署脚本 (VLESS TCP+TLS + HY2)
-# 支持域名/自签证书模式
-# Author: ChatGPT 改写版
+# Sing-box 一键部署脚本 (VLESS TCP+TLS + Hysteria2 UDP+TLS)
+# 支持域名/自签证书模式，自动端口检查、防火墙提醒
+# Author: ChatGPT 改写最终版
 
 set -e
 
 echo "=================== Sing-box 部署前环境检查 ==================="
 
-# 检查 root
+# Root 权限
 [[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
 echo "[✔] Root 权限 OK"
 
@@ -16,7 +16,7 @@ SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
 echo "[✔] 检测到公网 IP: $SERVER_IP"
 
 # 安装依赖
-for cmd in curl ss openssl qrencode dig systemctl bash socat; do
+for cmd in curl ss openssl qrencode dig systemctl bash socat ufw; do
     if ! command -v $cmd >/dev/null 2>&1; then
         echo "[!] $cmd 不存在，正在安装..."
         apt update -y
@@ -40,7 +40,7 @@ echo -e "\n环境检查完成 ✅"
 read -rp "确认继续执行部署吗？(y/N): " CONFIRM
 [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && exit 0
 
-# 部署模式选择
+# 模式选择
 echo -e "\n请选择部署模式："
 echo "1) 使用域名 + Let's Encrypt 证书"
 echo "2) 使用公网 IP + 自签证书"
@@ -127,42 +127,50 @@ get_random_port() {
 # 输入端口
 read -rp "请输入 VLESS TCP 端口 (默认 443, 输入0随机): " VLESS_PORT
 [[ -z "$VLESS_PORT" || "$VLESS_PORT" == "0" ]] && VLESS_PORT=$(get_random_port)
-read -rp "请输入 HY2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
+read -rp "请输入 Hysteria2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
 [[ -z "$HY2_PORT" || "$HY2_PORT" == "0" ]] && HY2_PORT=$(get_random_port)
 
-# UUID / HY2 密码
+# UUID / Hysteria2 密码（安全字符）
 UUID=$(cat /proc/sys/kernel/random/uuid)
-HY2_PASS=$(openssl rand -base64 12)
+HY2_PASS=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9')
 
 chmod 644 "$CERT_DIR"/*.pem
 
-# 生成 sing-box 配置 JSON (去掉 decryption)
-cat >/etc/sing-box/config.json <<'EOF'
+# 防火墙提示
+echo -e "\n[!] 请确保防火墙开放以下端口:"
+echo "TCP $VLESS_PORT"
+echo "UDP $HY2_PORT"
+echo "如果使用 ufw，可以运行:"
+echo "  ufw allow $VLESS_PORT/tcp"
+echo "  ufw allow $HY2_PORT/udp"
+
+# 生成 sing-box 配置 JSON
+cat >/etc/sing-box/config.json <<EOF
 {
   "log": { "level": "info" },
   "inbounds": [
     {
       "type": "vless",
       "listen": "0.0.0.0",
-      "listen_port": '"$VLESS_PORT"',
-      "users": [{ "uuid": "'"$UUID"'" }],
+      "listen_port": $VLESS_PORT,
+      "users": [{ "uuid": "$UUID" }],
       "tls": {
         "enabled": true,
-        "server_name": "'"$DOMAIN"'",
-        "certificate_path": "'"$CERT_DIR"'/fullchain.pem",
-        "key_path": "'"$CERT_DIR"'/privkey.pem"
+        "server_name": "$DOMAIN",
+        "certificate_path": "$CERT_DIR/fullchain.pem",
+        "key_path": "$CERT_DIR/privkey.pem"
       }
     },
     {
       "type": "hysteria2",
       "listen": "0.0.0.0",
-      "listen_port": '"$HY2_PORT"',
-      "users": [{ "password": "'"$HY2_PASS"'" }],
+      "listen_port": $HY2_PORT,
+      "users": [{ "password": "$HY2_PASS" }],
       "tls": {
         "enabled": true,
-        "server_name": "'"$DOMAIN"'",
-        "certificate_path": "'"$CERT_DIR"'/fullchain.pem",
-        "key_path": "'"$CERT_DIR"'/privkey.pem"
+        "server_name": "$DOMAIN",
+        "certificate_path": "$CERT_DIR/fullchain.pem",
+        "key_path": "$CERT_DIR/privkey.pem"
       }
     }
   ],
@@ -177,26 +185,26 @@ sleep 3
 
 # 检查端口监听
 [[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
-[[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] HY2 UDP $HY2_PORT 已监听" || echo "[✖] HY2 UDP $HY2_PORT 未监听"
+[[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] Hysteria2 UDP $HY2_PORT 已监听" || echo "[✖] Hysteria2 UDP $HY2_PORT 未监听"
 
 # 输出节点信息
 VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp#VLESS-$DOMAIN"
 HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
 
 echo -e "\n=================== VLESS 节点 ==================="
-echo -e "$VLESS_URI\n"
+echo "$VLESS_URI"
 echo "$VLESS_URI" | qrencode -t ansiutf8
 
-echo -e "\n=================== HY2 节点 ==================="
-echo -e "$HY2_URI\n"
+echo -e "\n=================== Hysteria2 节点 ==================="
+echo "$HY2_URI"
 echo "$HY2_URI" | qrencode -t ansiutf8
 
 # 生成订阅 JSON
 SUB_FILE="/root/singbox_nodes.json"
-cat > $SUB_FILE <<'EOF'
+cat > $SUB_FILE <<EOF
 {
-  "vless": "'"$VLESS_URI"'",
-  "hysteria2": "'"$HY2_URI"'"
+  "vless": "$VLESS_URI",
+  "hysteria2": "$HY2_URI"
 }
 EOF
 
