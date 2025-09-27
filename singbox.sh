@@ -1,34 +1,73 @@
-```bash
 #!/bin/bash
 # Sing-box 一键部署脚本 (VLESS TCP+TLS + HY2)
-# 模式选择: 1=域名(LE证书), 2=IP(自签证书)
-# Author: ChatGPT 优化版
+# 支持 模式选择 + 域名/无域名 + 环境检查
+# Author: ChatGPT
 
 set -e
 
-echo "=================== Sing-box 部署 ==================="
+echo "=================== Sing-box 部署前环境检查 ==================="
 
-# 检查 root
-[[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
+# 1. 检查 root
+if [[ $EUID -ne 0 ]]; then
+    echo "[✖] 请用 root 权限运行"
+    exit 1
+else
+    echo "[✔] Root 权限 OK"
+fi
 
-# 安装依赖
-apt update -y
-apt install -y curl socat openssl qrencode dnsutils systemd
+# 2. 获取公网 IP
+SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
+if [[ -z "$SERVER_IP" ]]; then
+    echo "[✖] 无法获取公网 IP，请检查网络"
+    exit 1
+else
+    echo "[✔] 检测到公网 IP: $SERVER_IP"
+fi
 
+# 3. 检查必要命令
+DEPS=("curl" "ss" "openssl" "qrencode" "dig" "systemctl" "bash")
+for cmd in "${DEPS[@]}"; do
+    if ! command -v $cmd &>/dev/null; then
+        echo "[✖] 缺少依赖: $cmd"
+        MISSING_DEPS=true
+    else
+        echo "[✔] 命令存在: $cmd"
+    fi
+done
+
+if [[ "$MISSING_DEPS" == "true" ]]; then
+    echo "[!] 安装缺失依赖..."
+    apt update -y
+    apt install -y curl iproute2 openssl qrencode dnsutils systemd
+fi
+
+# 4. 检查 80/443 端口占用
+if ss -tuln | grep -E ':(80|443)\s'; then
+    echo "[⚠] 80/443 端口可能被占用，域名模式申请证书可能失败"
+else
+    echo "[✔] 80/443 端口空闲"
+fi
+
+echo -e "\n环境检查完成 ✅"
+read -rp "确认继续执行部署吗？(y/N): " CONFIRM
+[[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && echo "已取消部署" && exit 0
+
+# -------------------------------
 # 安装 sing-box
+# -------------------------------
 if ! command -v sing-box &>/dev/null; then
     echo ">>> 安装 sing-box ..."
     bash <(curl -fsSL https://sing-box.app/deb-install.sh)
 fi
 
-# 选择模式
+# -------------------------------
+# 模式选择
+# -------------------------------
 echo -e "\n请选择部署模式："
-echo "1) 使用域名 + Let’s Encrypt 证书"
+echo "1) 使用域名 + Let's Encrypt 证书"
 echo "2) 使用公网 IP + 自签证书"
 read -rp "请输入选项 (1 或 2): " MODE
 
-# 获取服务器公网 IP
-SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
 CERT_DIR="/etc/ssl/sing-box"
 mkdir -p "$CERT_DIR"
 
@@ -98,7 +137,9 @@ else
     exit 1
 fi
 
+# -------------------------------
 # 随机端口函数
+# -------------------------------
 get_random_port() {
     while :; do
         PORT=$((RANDOM%50000+10000))
@@ -120,7 +161,9 @@ HY2_PASS=$(openssl rand -base64 12)
 # 修复证书权限
 chmod 644 "$CERT_DIR"/*.pem
 
+# -------------------------------
 # 生成 sing-box 配置
+# -------------------------------
 cat > /etc/sing-box/config.json <<EOF
 {
   "log": { "level": "info" },
@@ -155,7 +198,9 @@ cat > /etc/sing-box/config.json <<EOF
 }
 EOF
 
+# -------------------------------
 # 启动 sing-box
+# -------------------------------
 systemctl enable sing-box
 systemctl restart sing-box
 sleep 3
@@ -190,4 +235,3 @@ cat $SUB_FILE
 echo -e "\n订阅文件已保存到：$SUB_FILE"
 
 echo -e "\n=================== 部署完成 ==================="
-```
