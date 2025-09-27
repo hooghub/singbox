@@ -1,6 +1,6 @@
 #!/bin/bash
 # Sing-box 一键部署脚本 (VLESS TCP+TLS + HY2)
-# 支持 模式选择 + 域名/无域名 + 环境检查
+# 支持 模式选择 + 域名/自签 + 环境检查 + socat 前置依赖
 # Author: ChatGPT
 
 set -e
@@ -25,28 +25,31 @@ else
 fi
 
 # 3. 检查必要命令
-DEPS=("curl" "ss" "openssl" "qrencode" "dig" "systemctl" "bash")
+DEPS=("curl" "ss" "openssl" "qrencode" "dig" "systemctl" "bash" "socat")
 for cmd in "${DEPS[@]}"; do
     if ! command -v $cmd &>/dev/null; then
-        echo "[✖] 缺少依赖: $cmd"
+        echo "[⚠] 缺少依赖: $cmd"
         MISSING_DEPS=true
     else
         echo "[✔] 命令存在: $cmd"
     fi
 done
 
+# 安装缺失依赖
 if [[ "$MISSING_DEPS" == "true" ]]; then
     echo "[!] 安装缺失依赖..."
     apt update -y
-    apt install -y curl iproute2 openssl qrencode dnsutils systemd
+    apt install -y curl iproute2 openssl qrencode dnsutils systemd socat
 fi
 
 # 4. 检查 80/443 端口占用
-if ss -tuln | grep -E ':(80|443)\s'; then
-    echo "[⚠] 80/443 端口可能被占用，域名模式申请证书可能失败"
-else
-    echo "[✔] 80/443 端口空闲"
-fi
+for PORT in 80 443; do
+    if ss -tuln | grep -q ":$PORT "; then
+        echo "[⚠] 端口 $PORT 已被占用，域名模式申请证书可能失败"
+    else
+        echo "[✔] 端口 $PORT 空闲"
+    fi
+done
 
 echo -e "\n环境检查完成 ✅"
 read -rp "确认继续执行部署吗？(y/N): " CONFIRM
