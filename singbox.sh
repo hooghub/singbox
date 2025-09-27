@@ -1,7 +1,7 @@
 #!/bin/bash
 # Sing-box 一键部署脚本 (VLESS TCP+TLS + Hysteria2)
 # 支持：域名模式 / 自签固定域名 www.epple.com (URI 使用公网 IP)
-# Author: ChatGPT 改写版
+# Author: Chis
 
 set -e
 
