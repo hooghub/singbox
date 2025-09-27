@@ -36,16 +36,16 @@ if [[ ${#MISSING_CMDS[@]} -gt 0 ]]; then
     apt install -y "${INSTALL_PACKAGES[@]}"
 fi
 
-# --------- 检查常用端口 ---------
+# --------- 端口检查 ---------
 for port in 80 443; do
     if ss -tuln | grep -q ":$port"; then
-        echo "[✖] 端口 $port 已被占用"
+        echo "[✖] 端口 $port 已被占用"; exit 1
     else
         echo "[✔] 端口 $port 空闲"
     fi
 done
 
-read -rp "环境检查完成 ✅\n确认继续执行部署吗？(y/N): " CONFIRM
+read -rp "环境检查完成 ✅ 确认继续执行部署吗？(y/N): " CONFIRM
 [[ "$CONFIRM" =~ ^[Yy]$ ]] || exit 0
 
 # --------- 模式选择 ---------
@@ -84,7 +84,7 @@ if [[ "$MODE" == "1" ]]; then
     LE_CERT_PATH="$HOME/.acme.sh/${DOMAIN}_ecc/fullchain.cer"
     LE_KEY_PATH="$HOME/.acme.sh/${DOMAIN}_ecc/${DOMAIN}.key"
     if [[ -f "$LE_CERT_PATH" && -f "$LE_KEY_PATH" ]]; then
-        echo "[✔] 已检测到现有 Let’s Encrypt 证书，直接导入"
+        echo "[✔] 已检测到现有 Let's Encrypt 证书，直接导入"
         cp "$LE_CERT_PATH" "$CERT_DIR/fullchain.pem"
         cp "$LE_KEY_PATH" "$CERT_DIR/privkey.pem"
         chmod 644 "$CERT_DIR"/*.pem
@@ -95,8 +95,9 @@ if [[ "$MODE" == "1" ]]; then
             --key-file "$CERT_DIR/privkey.pem" \
             --fullchain-file "$CERT_DIR/fullchain.pem" --force
     fi
+
+# --------- 自签固定域名模式 ---------
 else
-    # --------- 自签固定域名模式 ---------
     DOMAIN="www.epple.com"
     echo "[!] 自签模式，将生成固定域名 $DOMAIN 的自签证书 (URI 使用 VPS 公网 IP)"
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -123,7 +124,6 @@ read -rp "请输入 VLESS TCP 端口 (默认 443, 输入0随机): " VLESS_PORT
 read -rp "请输入 Hysteria2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
 [[ -z "$HY2_PORT" || "$HY2_PORT" == "0" ]] && HY2_PORT=$(get_random_port)
 
-# --------- 自动生成 UUID 和 HY2 密码 ---------
 UUID=$(cat /proc/sys/kernel/random/uuid)
 HY2_PASS=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9')
 
@@ -161,8 +161,9 @@ cat > /etc/sing-box/config.json <<EOF
 }
 EOF
 
-# --------- 防火墙端口开放（仅检测到 UFW 时） ---------
+# --------- 防火墙端口开放（仅提示和开放端口） ---------
 if command -v ufw &>/dev/null; then
+    [[ "$(ufw status | head -n1)" != "Status: inactive" ]] && echo "[✔] UFW 防火墙已启用"
     ufw allow 80/tcp
     ufw allow 443/tcp
     ufw allow "$VLESS_PORT"/tcp
@@ -175,21 +176,19 @@ systemctl enable sing-box
 systemctl restart sing-box
 sleep 3
 
-# --------- 检查端口监听 ---------
 [[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
 [[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] Hysteria2 UDP $HY2_PORT 已监听" || echo "[✖] Hysteria2 UDP $HY2_PORT 未监听"
 
-# --------- 生成节点 URI 和二维码 ---------
+# --------- 生成节点信息与二维码 ---------
 if [[ "$MODE" == "1" ]]; then
-    NODE_HOST="$DOMAIN"
-    INSECURE="0"
+    # 域名模式 insecure=0
+    VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&insecure=0#VLESS-$DOMAIN"
+    HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?security=tls&sni=$DOMAIN&insecure=0#HY2-$DOMAIN"
 else
-    NODE_HOST="$SERVER_IP"
-    INSECURE="1"
+    # 自签 IP insecure=1
+    VLESS_URI="vless://$UUID@$SERVER_IP:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&insecure=1#VLESS-$SERVER_IP"
+    HY2_URI="hysteria2://$HY2_PASS@$SERVER_IP:$HY2_PORT?insecure=1&sni=$DOMAIN#HY2-$SERVER_IP"
 fi
-
-VLESS_URI="vless://$UUID@$NODE_HOST:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp#VLESS-$NODE_HOST"
-HY2_URI="hysteria2://$HY2_PASS@$NODE_HOST:$HY2_PORT?insecure=$INSECURE&sni=$DOMAIN#HY2-$NODE_HOST"
 
 echo -e "\n=================== VLESS 节点 ==================="
 echo -e "$VLESS_URI\n"
@@ -198,18 +197,5 @@ command -v qrencode &>/dev/null && echo "$VLESS_URI" | qrencode -t ansiutf8
 echo -e "\n=================== Hysteria2 节点 ==================="
 echo -e "$HY2_URI\n"
 command -v qrencode &>/dev/null && echo "$HY2_URI" | qrencode -t ansiutf8
-
-# --------- 生成订阅 JSON ---------
-SUB_FILE="/root/singbox_nodes.json"
-cat > $SUB_FILE <<EOF
-{
-  "vless": "$VLESS_URI",
-  "hysteria2": "$HY2_URI"
-}
-EOF
-
-echo -e "\n=================== 订阅文件内容 ==================="
-cat $SUB_FILE
-echo -e "\n订阅文件已保存到：$SUB_FILE"
 
 echo -e "\n=================== 部署完成 ==================="
