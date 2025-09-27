@@ -11,7 +11,7 @@ echo "=================== Sing-box 高级部署 (Let’s Encrypt 优化版) ====
 
 # 安装依赖
 apt-get update -y
-apt-get install -y curl socat openssl qrencode dnsutils systemd lsof
+apt-get install -y curl socat openssl qrencode dnsutils systemd lsof jq
 
 # 安装 acme.sh
 if ! command -v acme.sh &>/dev/null; then
@@ -133,7 +133,7 @@ EOF
 systemctl daemon-reload
 systemctl enable --now acme-renew.timer
 
-# 生成 sing-box 配置
+# 生成 sing-box 配置（移除 VLESS decryption 字段）
 mkdir -p /etc/sing-box
 cat > /etc/sing-box/config.json <<EOF
 {
@@ -144,7 +144,6 @@ cat > /etc/sing-box/config.json <<EOF
       "listen": "0.0.0.0",
       "listen_port": $VLESS_PORT,
       "users": [{ "uuid": "$UUID" }],
-      "decryption": "none",
       "tls": {
         "enabled": true,
         "server_name": "$DOMAIN",
