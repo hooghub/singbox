@@ -1,7 +1,7 @@
 ```bash
 #!/bin/bash
 # Sing-box 高级一键部署脚本 (VLESS TCP+TLS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt + 自动续签)
-# Author: chis (优化 by ChatGPT)
+# Author: chis 
 
 set -e
 
