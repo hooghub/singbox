@@ -1,46 +1,8 @@
 #!/bin/bash
 # Sing-box 高级一键部署脚本 (VLESS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt)
-# 支持 --show 参数仅显示节点信息
 # Author: ChatGPT
 
 set -e
-
-SHOW_ONLY=0
-if [[ "$1" == "--show" ]]; then
-    SHOW_ONLY=1
-fi
-
-# 节点订阅文件
-SUB_FILE="/root/singbox_nodes.json"
-
-show_nodes() {
-    if [[ ! -f "$SUB_FILE" ]]; then
-        echo "[✖] 节点文件 $SUB_FILE 不存在，请先部署节点。"
-        exit 1
-    fi
-    # 读取节点
-    VLESS_URI=$(jq -r '.vless' "$SUB_FILE")
-    HY2_URI=$(jq -r '.hysteria2' "$SUB_FILE")
-
-    echo -e "\n=================== 节点信息 ==================="
-    echo -e "VLESS 节点:\n$VLESS_URI"
-    echo -e "HY2 节点:\n$HY2_URI"
-
-    # 显示 QR 码
-    echo -e "\nVLESS QR:"
-    echo "$VLESS_URI" | qrencode -t ansiutf8
-    echo -e "\nHY2 QR:"
-    echo "$HY2_URI" | qrencode -t ansiutf8
-
-    echo -e "\n=================== 订阅文件内容 ==================="
-    cat "$SUB_FILE"
-    echo -e "\n订阅文件路径：$SUB_FILE"
-    exit 0
-}
-
-if [[ $SHOW_ONLY -eq 1 ]]; then
-    show_nodes
-fi
 
 echo "=================== Sing-box 高级部署 (Let’s Encrypt) ==================="
 
@@ -49,7 +11,7 @@ echo "=================== Sing-box 高级部署 (Let’s Encrypt) ==============
 
 # 安装依赖
 apt update -y
-apt install -y curl socat cron openssl qrencode dnsutils jq
+apt install -y curl socat cron openssl qrencode dnsutils
 
 # 安装 acme.sh
 if ! command -v acme.sh &>/dev/null; then
@@ -68,7 +30,7 @@ fi
 # 用户输入域名
 read -rp "请输入你的域名 (例如: lg.lyn.edu.deal): " DOMAIN
 
-# 检查域名解析
+# 检查域名是否解析到本机 IP
 echo ">>> 检查域名解析..."
 SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
 DOMAIN_IP=$(dig +short A "$DOMAIN" | tail -n1)
@@ -121,7 +83,7 @@ echo ">>> 申请 Let's Encrypt TLS 证书"
   --key-file       "$CERT_DIR/privkey.pem" \
   --fullchain-file "$CERT_DIR/fullchain.pem" --force
 
-# 添加证书自动续签任务（每30天执行一次）
+# 添加证书自动续签任务（每30天运行一次）
 (crontab -l 2>/dev/null | grep -v 'acme.sh'; echo "0 0 */30 * * ~/.acme.sh/acme.sh --cron --home ~/.acme.sh > /dev/null && systemctl restart sing-box") | crontab -
 
 # 生成 sing-box 配置
@@ -183,6 +145,7 @@ echo -e "\nHY2 QR:"
 echo "$HY2_URI" | qrencode -t ansiutf8
 
 # 生成订阅 JSON 文件
+SUB_FILE="/root/singbox_nodes.json"
 cat > $SUB_FILE <<EOF
 {
   "vless": "$VLESS_URI",
@@ -192,7 +155,7 @@ EOF
 
 # 在屏幕显示订阅文件内容
 echo -e "\n=================== 订阅文件内容 ==================="
-cat "$SUB_FILE"
+cat $SUB_FILE
 echo -e "\n订阅文件已保存到：$SUB_FILE"
 
 echo -e "\n=================== 部署完成 ==================="
