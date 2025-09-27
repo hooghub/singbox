@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sing-box 一键部署脚本 (最终增强版)
+# Sing-box 一键部署脚本 (最终修正版)
 # 支持：域名模式 / 自签固定域名 www.epple.com (URI 使用公网 IP)
 # Author: Chis (优化 by ChatGPT)
 
@@ -96,6 +96,8 @@ if [[ "$MODE" == "1" ]]; then
             --fullchain-file "$CERT_DIR/fullchain.pem" --force
     fi
 
+    NODE_HOST="$DOMAIN"
+
 # --------- 自签固定域名模式 ---------
 else
     DOMAIN="www.epple.com"
@@ -107,6 +109,7 @@ else
         -addext "subjectAltName = DNS:$DOMAIN,IP:$SERVER_IP"
     chmod 644 "$CERT_DIR"/*.pem
     echo "[✔] 自签证书生成完成，CN/SAN 包含 $DOMAIN 和 $SERVER_IP"
+    NODE_HOST="$SERVER_IP"
 fi
 
 # --------- 随机端口函数 ---------
@@ -161,28 +164,15 @@ cat > /etc/sing-box/config.json <<EOF
 }
 EOF
 
-# --------- 防火墙检测与端口开放 ---------
+# --------- 防火墙端口开放 (仅检测到 UFW 时) ---------
 if command -v ufw &>/dev/null; then
-    UFW_STATUS=$(ufw status | head -n1)
-    if [[ "$UFW_STATUS" =~ "inactive" ]]; then
-        read -rp "[!] UFW 防火墙未启用，是否启用并开放必要端口？(y/N): " ENABLE_UFW
-        if [[ "$ENABLE_UFW" =~ ^[Yy]$ ]]; then
-            ufw enable
-            echo "[✔] UFW 已启用"
-        else
-            echo "[!] 跳过启用 UFW，请确保 VPS 已开放端口"
-        fi
-    else
-        echo "[✔] UFW 防火墙已启用"
-    fi
+    echo "[✔] 检测到 UFW 防火墙，开放必要端口"
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    ufw allow "$VLESS_PORT"/tcp
+    ufw allow "$HY2_PORT"/udp
+    ufw reload || true
 fi
-
-echo "[✔] 开放防火墙端口：80/tcp, 443/tcp, $VLESS_PORT/tcp, $HY2_PORT/udp"
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw allow "$VLESS_PORT"/tcp
-ufw allow "$HY2_PORT"/udp
-ufw reload || true
 
 # --------- 启动 sing-box ---------
 systemctl enable sing-box
@@ -193,8 +183,8 @@ sleep 3
 [[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] Hysteria2 UDP $HY2_PORT 已监听" || echo "[✖] Hysteria2 UDP $HY2_PORT 未监听"
 
 # --------- 生成节点信息与二维码 ---------
-VLESS_URI="vless://$UUID@$SERVER_IP:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp#VLESS-$DOMAIN"
-HY2_URI="hysteria2://$HY2_PASS@$SERVER_IP:$HY2_PORT?insecure=1&sni=$DOMAIN#HY2-$DOMAIN"
+VLESS_URI="vless://$UUID@$NODE_HOST:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp#VLESS-$NODE_HOST"
+HY2_URI="hysteria2://$HY2_PASS@$NODE_HOST:$HY2_PORT?insecure=1&sni=$DOMAIN#HY2-$NODE_HOST"
 
 echo -e "\n=================== VLESS 节点 ==================="
 echo -e "$VLESS_URI\n"
