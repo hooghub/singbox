@@ -1,6 +1,6 @@
 #!/bin/bash
-# Sing-box 一键部署脚本 (最终完善版)
-# 支持：域名模式 / 自签固定域名 www.epple.com (URI 使用公网 IP)
+# Sing-box 一键部署脚本 (最终整合版)
+# 支持：域名模式 / 自签固定域名 www.epple.com
 # Author: Chis (优化 by ChatGPT)
 
 set -e
@@ -10,7 +10,7 @@ echo "=================== Sing-box 部署前环境检查 ==================="
 # --------- 检查 root ---------
 [[ $EUID -ne 0 ]] && echo "[✖] 请用 root 权限运行" && exit 1 || echo "[✔] Root 权限 OK"
 
-# --------- 检测公网 IP ---------
+# --------- 检测 VPS 公网 IP ---------
 SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
 [[ -n "$SERVER_IP" ]] && echo "[✔] 检测到公网 IP: $SERVER_IP" || { echo "[✖] 获取公网 IP 失败"; exit 1; }
 
@@ -92,111 +92,4 @@ if [[ "$MODE" == "1" ]]; then
         echo ">>> 申请新的 Let's Encrypt TLS 证书"
         /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
         /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
-            --key-file "$CERT_DIR/privkey.pem" \
-            --fullchain-file "$CERT_DIR/fullchain.pem" --force
-    fi
-
-# --------- 自签固定域名模式 ---------
-else
-    DOMAIN="www.epple.com"
-    echo "[!] 自签模式，将生成固定域名 $DOMAIN 的自签证书 (URI 使用 VPS 公网 IP)"
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "$CERT_DIR/privkey.pem" \
-        -out "$CERT_DIR/fullchain.pem" \
-        -subj "/CN=$DOMAIN" \
-        -addext "subjectAltName = DNS:$DOMAIN,IP:$SERVER_IP"
-    chmod 644 "$CERT_DIR"/*.pem
-    echo "[✔] 自签证书生成完成，CN/SAN 包含 $DOMAIN 和 $SERVER_IP"
-fi
-
-# --------- 随机端口函数 ---------
-get_random_port() {
-    while :; do
-        PORT=$((RANDOM%50000+10000))
-        ss -tuln | grep -q $PORT || break
-    done
-    echo $PORT
-}
-
-# --------- 输入端口 ---------
-read -rp "请输入 VLESS TCP 端口 (默认 443, 输入0随机): " VLESS_PORT
-[[ -z "$VLESS_PORT" || "$VLESS_PORT" == "0" ]] && VLESS_PORT=$(get_random_port)
-read -rp "请输入 Hysteria2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
-[[ -z "$HY2_PORT" || "$HY2_PORT" == "0" ]] && HY2_PORT=$(get_random_port)
-
-UUID=$(cat /proc/sys/kernel/random/uuid)
-HY2_PASS=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9')
-
-# --------- 生成 sing-box 配置 ---------
-cat > /etc/sing-box/config.json <<EOF
-{
-  "log": { "level": "info" },
-  "inbounds": [
-    {
-      "type": "vless",
-      "listen": "0.0.0.0",
-      "listen_port": $VLESS_PORT,
-      "users": [{ "uuid": "$UUID" }],
-      "tls": {
-        "enabled": true,
-        "server_name": "$DOMAIN",
-        "certificate_path": "$CERT_DIR/fullchain.pem",
-        "key_path": "$CERT_DIR/privkey.pem"
-      }
-    },
-    {
-      "type": "hysteria2",
-      "listen": "0.0.0.0",
-      "listen_port": $HY2_PORT,
-      "users": [{ "password": "$HY2_PASS" }],
-      "tls": {
-        "enabled": true,
-        "server_name": "$DOMAIN",
-        "certificate_path": "$CERT_DIR/fullchain.pem",
-        "key_path": "$CERT_DIR/privkey.pem"
-      }
-    }
-  ],
-  "outbounds": [{ "type": "direct" }]
-}
-EOF
-
-# --------- 防火墙端口开放 ---------
-if command -v ufw &>/dev/null; then
-    UFW_STATUS=$(ufw status | head -n1)
-    [[ "$UFW_STATUS" != "inactive" ]] && echo "[✔] UFW 防火墙已启用"
-    ufw allow 80/tcp
-    ufw allow 443/tcp
-    ufw allow "$VLESS_PORT"/tcp
-    ufw allow "$HY2_PORT"/udp
-    ufw reload || true
-fi
-
-# --------- 启动 sing-box ---------
-systemctl enable sing-box
-systemctl restart sing-box
-sleep 3
-
-[[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
-[[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] Hysteria2 UDP $HY2_PORT 已监听" || echo "[✖] Hysteria2 UDP $HY2_PORT 未监听"
-
-# --------- 生成节点信息与二维码 ---------
-# VLESS insecure 根据模式
-if [[ "$MODE" == "1" ]]; then
-    VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp#VLESS-$DOMAIN"
-else
-    VLESS_URI="vless://$UUID@$SERVER_IP:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&insecure=1#VLESS-$SERVER_IP"
-fi
-
-HY2_INSECURE=$([[ "$MODE" == "1" ]] && echo "0" || echo "1")
-HY2_URI="hysteria2://$HY2_PASS@$SERVER_IP:$HY2_PORT?insecure=$HY2_INSECURE&sni=$DOMAIN#HY2-$DOMAIN"
-
-echo -e "\n=================== VLESS 节点 ==================="
-echo -e "$VLESS_URI\n"
-command -v qrencode &>/dev/null && echo "$VLESS_URI" | qrencode -t ansiutf8
-
-echo -e "\n=================== Hysteria2 节点 ==================="
-echo -e "$HY2_URI\n"
-command -v qrencode &>/dev/null && echo "$HY2_URI" | qrencode -t ansiutf8
-
-echo -e "\n=================== 部署完成 ==================="
+            --key-file "$CERT_DIR/privkey.pem"_
