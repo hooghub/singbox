@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sing-box 一键部署脚本 (最终增强版)
+# Sing-box 一键部署脚本 (最终完善版)
 # 支持：域名模式 / 自签固定域名 www.epple.com (URI 使用公网 IP)
 # Author: Chis (优化 by ChatGPT)
 
@@ -45,7 +45,7 @@ for port in 80 443; do
     fi
 done
 
-read -rp "环境检查完成 ✅ 确认继续执行部署吗？(y/N): " CONFIRM
+read -rp "环境检查完成 ✅\n确认继续执行部署吗？(y/N): " CONFIRM
 [[ "$CONFIRM" =~ ^[Yy]$ ]] || exit 0
 
 # --------- 模式选择 ---------
@@ -84,7 +84,7 @@ if [[ "$MODE" == "1" ]]; then
     LE_CERT_PATH="$HOME/.acme.sh/${DOMAIN}_ecc/fullchain.cer"
     LE_KEY_PATH="$HOME/.acme.sh/${DOMAIN}_ecc/${DOMAIN}.key"
     if [[ -f "$LE_CERT_PATH" && -f "$LE_KEY_PATH" ]]; then
-        echo "[✔] 已检测到现有 Let's Encrypt 证书，直接导入"
+        echo "[✔] 已检测到现有 Let’s Encrypt 证书，直接导入"
         cp "$LE_CERT_PATH" "$CERT_DIR/fullchain.pem"
         cp "$LE_KEY_PATH" "$CERT_DIR/privkey.pem"
         chmod 644 "$CERT_DIR"/*.pem
@@ -161,9 +161,10 @@ cat > /etc/sing-box/config.json <<EOF
 }
 EOF
 
-# --------- 防火墙端口开放（仅提示和开放端口） ---------
+# --------- 防火墙端口开放 ---------
 if command -v ufw &>/dev/null; then
-    [[ "$(ufw status | head -n1)" != "Status: inactive" ]] && echo "[✔] UFW 防火墙已启用"
+    UFW_STATUS=$(ufw status | head -n1)
+    [[ "$UFW_STATUS" != "inactive" ]] && echo "[✔] UFW 防火墙已启用"
     ufw allow 80/tcp
     ufw allow 443/tcp
     ufw allow "$VLESS_PORT"/tcp
@@ -180,15 +181,15 @@ sleep 3
 [[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] Hysteria2 UDP $HY2_PORT 已监听" || echo "[✖] Hysteria2 UDP $HY2_PORT 未监听"
 
 # --------- 生成节点信息与二维码 ---------
+# VLESS insecure 根据模式
 if [[ "$MODE" == "1" ]]; then
-    # 域名模式 insecure=0
-    VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&insecure=0#VLESS-$DOMAIN"
-    HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?security=tls&sni=$DOMAIN&insecure=0#HY2-$DOMAIN"
+    VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp#VLESS-$DOMAIN"
 else
-    # 自签 IP insecure=1
     VLESS_URI="vless://$UUID@$SERVER_IP:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp&insecure=1#VLESS-$SERVER_IP"
-    HY2_URI="hysteria2://$HY2_PASS@$SERVER_IP:$HY2_PORT?insecure=1&sni=$DOMAIN#HY2-$SERVER_IP"
 fi
+
+HY2_INSECURE=$([[ "$MODE" == "1" ]] && echo "0" || echo "1")
+HY2_URI="hysteria2://$HY2_PASS@$SERVER_IP:$HY2_PORT?insecure=$HY2_INSECURE&sni=$DOMAIN#HY2-$DOMAIN"
 
 echo -e "\n=================== VLESS 节点 ==================="
 echo -e "$VLESS_URI\n"
