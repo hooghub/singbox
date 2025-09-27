@@ -1,7 +1,7 @@
 #!/bin/bash
 # Sing-box 一键部署脚本 (VLESS TCP+TLS + Hysteria2 UDP+TLS)
 # 支持域名/自签证书模式，自动端口检查、防火墙提醒
-# Author: ChatGPT 改写最终版
+# Author: ChatGPT 最终版
 
 set -e
 
@@ -26,7 +26,7 @@ for cmd in curl ss openssl qrencode dig systemctl bash socat ufw; do
     fi
 done
 
-# 检查端口
+# 检查端口 80/443
 for port in 80 443; do
     if ss -tuln | grep -q ":$port "; then
         echo "[✖] 端口 $port 已占用，请先释放"
@@ -54,7 +54,6 @@ fi
 
 CERT_DIR="/etc/ssl/sing-box"
 mkdir -p "$CERT_DIR"
-
 DOMAIN=""
 USE_DOMAIN=false
 
@@ -76,11 +75,16 @@ if [[ "$MODE" == "1" ]]; then
     fi
     /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 
-    echo ">>> 申请 Let's Encrypt TLS 证书"
-    /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
-    /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
-        --key-file "$CERT_DIR/privkey.pem" \
-        --fullchain-file "$CERT_DIR/fullchain.pem" --force
+    # 判断证书是否存在
+    if [[ -f "$CERT_DIR/fullchain.pem" && -f "$CERT_DIR/privkey.pem" ]]; then
+        echo "[✔] TLS 证书已存在，跳过申请"
+    else
+        echo ">>> 申请 Let's Encrypt TLS 证书"
+        /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
+        /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
+            --key-file "$CERT_DIR/privkey.pem" \
+            --fullchain-file "$CERT_DIR/fullchain.pem" --force
+    fi
 
     # 自动续签 systemd
     cat >/etc/systemd/system/acme-renew.service <<'EOF'
@@ -132,7 +136,7 @@ read -rp "请输入 Hysteria2 UDP 端口 (默认 8443, 输入0随机): " HY2_POR
 
 # UUID / Hysteria2 密码（安全字符）
 UUID=$(cat /proc/sys/kernel/random/uuid)
-HY2_PASS=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9')
+HY2_PASS=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9')
 
 chmod 644 "$CERT_DIR"/*.pem
 
