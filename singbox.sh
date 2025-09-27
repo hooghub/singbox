@@ -1,11 +1,12 @@
 ```bash
 #!/bin/bash
-# Sing-box 高级一键部署脚本 (VLESS TCP+TLS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt + 自动续签)
-# Author: chis (优化 by ChatGPT)
+# Sing-box 一键部署脚本 (VLESS TCP+TLS + HY2)
+# 模式选择: 1=域名(LE证书), 2=IP(自签证书)
+# Author: ChatGPT 优化版
 
 set -e
 
-echo "=================== Sing-box 高级部署 (Let’s Encrypt 优化版) ==================="
+echo "=================== Sing-box 部署 ==================="
 
 # 检查 root
 [[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
@@ -14,92 +15,63 @@ echo "=================== Sing-box 高级部署 (Let’s Encrypt 优化版) ====
 apt update -y
 apt install -y curl socat openssl qrencode dnsutils systemd
 
-# 安装 acme.sh
-if ! command -v acme.sh &>/dev/null; then
-    echo ">>> 安装 acme.sh ..."
-    curl https://get.acme.sh | sh
-    source ~/.bashrc || true
-fi
-
-if [[ ! -f "/root/.acme.sh/acme.sh" ]]; then
-    echo "[✖] acme.sh 安装失败，请手动执行: curl https://get.acme.sh | sh"
-    exit 1
-fi
-
-# 设置默认 CA 为 Let's Encrypt
-/root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-
 # 安装 sing-box
 if ! command -v sing-box &>/dev/null; then
     echo ">>> 安装 sing-box ..."
     bash <(curl -fsSL https://sing-box.app/deb-install.sh)
 fi
 
-# 输入域名
-read -rp "请输入你的域名 (例如: lg.lyn.edu.deal): " DOMAIN
+# 选择模式
+echo -e "\n请选择部署模式："
+echo "1) 使用域名 + Let’s Encrypt 证书"
+echo "2) 使用公网 IP + 自签证书"
+read -rp "请输入选项 (1 或 2): " MODE
 
-# 检查域名是否解析到本机 IP
-echo ">>> 检查域名解析..."
+# 获取服务器公网 IP
 SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
-DOMAIN_IP=$(dig +short A "$DOMAIN" | tail -n1)
-
-if [[ -z "$DOMAIN_IP" ]]; then
-    echo "[✖] 域名 $DOMAIN 未解析，请先正确配置 DNS"
-    exit 1
-fi
-if [[ "$SERVER_IP" != "$DOMAIN_IP" ]]; then
-    echo "[✖] 域名 $DOMAIN 解析到 $DOMAIN_IP，但本机 IP 是 $SERVER_IP"
-    exit 1
-fi
-echo "[✔] 域名 $DOMAIN 已正确解析到当前 VPS ($SERVER_IP)"
-
-# 随机端口函数
-get_random_port() {
-    while :; do
-        PORT=$((RANDOM%50000+10000))
-        ss -tuln | grep -q $PORT || break
-    done
-    echo $PORT
-}
-
-# VLESS TCP 端口
-read -rp "请输入 VLESS TCP 端口 (默认 443, 输入0随机): " VLESS_PORT
-[[ -z "$VLESS_PORT" || "$VLESS_PORT" == "0" ]] && VLESS_PORT=$(get_random_port)
-
-# HY2 UDP 端口
-read -rp "请输入 HY2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
-[[ -z "$HY2_PORT" || "$HY2_PORT" == "0" ]] && HY2_PORT=$(get_random_port)
-
-# UUID 和 HY2 密码
-UUID=$(cat /proc/sys/kernel/random/uuid)
-HY2_PASS=$(openssl rand -base64 12)
-
-# TLS 证书目录
-CERT_DIR="/etc/ssl/$DOMAIN"
+CERT_DIR="/etc/ssl/sing-box"
 mkdir -p "$CERT_DIR"
 
-echo ">>> 申请 Let's Encrypt TLS 证书"
-/root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
-/root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
-  --key-file "$CERT_DIR/privkey.pem" \
-  --fullchain-file "$CERT_DIR/fullchain.pem" --force
+if [[ "$MODE" == "1" ]]; then
+    read -rp "请输入你的域名: " DOMAIN
+    echo ">>> 检查域名解析..."
+    DOMAIN_IP=$(dig +short A "$DOMAIN" | tail -n1)
+    if [[ -z "$DOMAIN_IP" ]]; then
+        echo "[✖] 域名 $DOMAIN 未解析，请先配置 DNS"
+        exit 1
+    fi
+    if [[ "$SERVER_IP" != "$DOMAIN_IP" ]]; then
+        echo "[✖] 域名 $DOMAIN 解析到 $DOMAIN_IP，但本机 IP 是 $SERVER_IP"
+        exit 1
+    fi
+    echo "[✔] 域名 $DOMAIN 已正确解析到当前 VPS ($SERVER_IP)"
 
-# 修复证书权限
-chown -R nobody:nogroup "$CERT_DIR"
-chmod 600 "$CERT_DIR"/*.pem
+    # 安装 acme.sh
+    if ! command -v acme.sh &>/dev/null; then
+        echo ">>> 安装 acme.sh ..."
+        curl https://get.acme.sh | sh
+        source ~/.bashrc || true
+    fi
+    /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 
-# systemd 自动续签
-cat > /etc/systemd/system/acme-renew.service <<EOF
+    echo ">>> 申请 Let's Encrypt TLS 证书"
+    /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
+    /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
+      --key-file "$CERT_DIR/privkey.pem" \
+      --fullchain-file "$CERT_DIR/fullchain.pem" --force
+
+    # 自动续签
+    cat > /etc/systemd/system/acme-renew.service <<EOF
 [Unit]
 Description=Renew Let's Encrypt certificates via acme.sh
 
 [Service]
 Type=oneshot
 ExecStart=/root/.acme.sh/acme.sh --cron --home /root/.acme.sh --force
-ExecStartPost=/bin/systemctl restart sing-box
+ExecStartPost=/bin/systemctl reload-or-restart sing-box
 EOF
 
-cat > /etc/systemd/system/acme-renew.timer <<EOF
+    cat > /etc/systemd/system/acme-renew.timer <<EOF
 [Unit]
 Description=Run acme-renew.service daily
 
@@ -111,8 +83,42 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-systemctl daemon-reload
-systemctl enable --now acme-renew.timer
+    systemctl daemon-reload
+    systemctl enable --now acme-renew.timer
+
+elif [[ "$MODE" == "2" ]]; then
+    echo "[!] 使用公网 IP + 自签证书"
+    DOMAIN=$SERVER_IP
+    openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+        -subj "/CN=$DOMAIN" \
+        -keyout "$CERT_DIR/privkey.pem" \
+        -out "$CERT_DIR/fullchain.pem"
+else
+    echo "[✖] 输入无效，请输入 1 或 2"
+    exit 1
+fi
+
+# 随机端口函数
+get_random_port() {
+    while :; do
+        PORT=$((RANDOM%50000+10000))
+        ss -tuln | grep -q $PORT || break
+    done
+    echo $PORT
+}
+
+# 输入端口
+read -rp "请输入 VLESS TCP 端口 (默认 443, 输入0随机): " VLESS_PORT
+[[ -z "$VLESS_PORT" || "$VLESS_PORT" == "0" ]] && VLESS_PORT=$(get_random_port)
+read -rp "请输入 HY2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
+[[ -z "$HY2_PORT" || "$HY2_PORT" == "0" ]] && HY2_PORT=$(get_random_port)
+
+# UUID 和 HY2 密码
+UUID=$(cat /proc/sys/kernel/random/uuid)
+HY2_PASS=$(openssl rand -base64 12)
+
+# 修复证书权限
+chmod 644 "$CERT_DIR"/*.pem
 
 # 生成 sing-box 配置
 cat > /etc/sing-box/config.json <<EOF
@@ -184,3 +190,4 @@ cat $SUB_FILE
 echo -e "\n订阅文件已保存到：$SUB_FILE"
 
 echo -e "\n=================== 部署完成 ==================="
+```
