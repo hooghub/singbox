@@ -1,18 +1,17 @@
-```bash
 #!/bin/bash
-# Sing-box 高级一键部署脚本 (VLESS TCP+TLS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt + 自动续签)
-# Author: chis 
+# Sing-box 高级一键部署脚本 (VLESS TCP+TLS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt + 开机自启)
+# Author: chis (修改 by ChatGPT)
 
 set -e
 
-echo "=================== Sing-box 高级部署 (Let’s Encrypt 优化版) ==================="
+echo "=================== Sing-box 高级部署 (Let’s Encrypt) ==================="
 
 # 检查 root
 [[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
 
 # 安装依赖
 apt update -y
-apt install -y curl socat openssl qrencode dnsutils
+apt install -y curl socat cron openssl qrencode dnsutils
 
 # 安装 acme.sh
 if ! command -v acme.sh &>/dev/null; then
@@ -43,6 +42,7 @@ fi
 
 if [[ "$SERVER_IP" != "$DOMAIN_IP" ]]; then
     echo "[✖] 域名 $DOMAIN 解析到 $DOMAIN_IP，但本机 IP 是 $SERVER_IP"
+    echo "请先将域名解析到当前 VPS，再运行本脚本。"
     exit 1
 fi
 
@@ -83,37 +83,10 @@ echo ">>> 申请 Let's Encrypt TLS 证书"
   --key-file       "$CERT_DIR/privkey.pem" \
   --fullchain-file "$CERT_DIR/fullchain.pem" --force
 
-# 修复证书权限 (避免 sing-box 无法读取)
-chown -R nobody:nogroup "$CERT_DIR"
-chmod 600 "$CERT_DIR"/*.pem
+# 添加证书自动续签任务（每30天运行一次）
+(crontab -l 2>/dev/null | grep -v 'acme.sh'; echo "0 0 */30 * * ~/.acme.sh/acme.sh --cron --home ~/.acme.sh > /dev/null && systemctl restart sing-box") | crontab -
 
-# 启用 acme.sh 自动续签 (systemd)
-~/.acme.sh/acme.sh --install-cronjob
-cat > /etc/systemd/system/acme-renew.service <<EOF
-[Unit]
-Description=Renew Let's Encrypt certificates via acme.sh
-
-[Service]
-Type=oneshot
-ExecStart=/root/.acme.sh/acme.sh --cron --home /root/.acme.sh --force && systemctl restart sing-box
-EOF
-
-cat > /etc/systemd/system/acme-renew.timer <<EOF
-[Unit]
-Description=Run acme-renew.service every day
-
-[Timer]
-OnCalendar=daily
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-systemctl daemon-reload
-systemctl enable --now acme-renew.timer
-
-# 生成 sing-box 配置 (VLESS TCP+TLS + HY2)
+# 生成 sing-box 配置 (VLESS TCP+TLS)
 cat > /etc/sing-box/config.json <<EOF
 {
   "log": { "level": "info" },
@@ -123,7 +96,6 @@ cat > /etc/sing-box/config.json <<EOF
       "listen": "0.0.0.0",
       "listen_port": $VLESS_PORT,
       "users": [{ "uuid": "$UUID" }],
-      "decryption": "none",
       "tls": {
         "enabled": true,
         "server_name": "$DOMAIN",
@@ -152,6 +124,24 @@ EOF
 systemctl enable sing-box
 systemctl restart sing-box
 sleep 3
+
+# 创建 systemd 开机自启脚本（确保网络就绪后启动 sing-box）
+cat > /etc/systemd/system/singbox-startup.service <<EOF
+[Unit]
+Description=Sing-box auto start after network is up
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart sing-box
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable singbox-startup.service
 
 # 检查端口监听
 echo
@@ -185,5 +175,4 @@ echo -e "\n=================== 订阅文件内容 ==================="
 cat $SUB_FILE
 echo -e "\n订阅文件已保存到：$SUB_FILE"
 
-echo -e "\n=================== 部署完成 ==================="
-```
+echo -e "\n=================== 部署完成 ==================="帮优化下。里面节点vless生成后不通？
