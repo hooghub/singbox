@@ -1,123 +1,55 @@
 #!/bin/bash
-# Sing-box 一键部署脚本 (VLESS TCP+TLS + Hysteria2 UDP+TLS)
-# 支持域名/自签证书模式，自动端口检查、防火墙提醒
-# 如果已有证书则不重复申请
-# Author: ChatGPT 最终版
+# Sing-box 最终一键部署脚本
+# 支持 域名模式（LE证书存在则不申请） / 自签证书模式
+# VLESS + Hysteria2 + TLS
+# Author: ChatGPT 改写
 
 set -e
 
 echo "=================== Sing-box 部署前环境检查 ==================="
 
-# Root 权限
-[[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
-echo "[✔] Root 权限 OK"
+# 检查 root
+[[ $EUID -ne 0 ]] && echo "[✖] 请用 root 权限运行" && exit 1 || echo "[✔] Root 权限 OK"
 
-# 公网 IP
+# 检测公网 IP
 SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
+[[ -z "$SERVER_IP" ]] && echo "[✖] 获取公网 IP 失败" && exit 1
 echo "[✔] 检测到公网 IP: $SERVER_IP"
 
-# 安装依赖
-for cmd in curl ss openssl qrencode dig systemctl bash socat ufw; do
-    if ! command -v $cmd >/dev/null 2>&1; then
-        echo "[!] $cmd 不存在，正在安装..."
-        apt update -y
-        apt install -y $cmd
-    else
-        echo "[✔] 命令存在: $cmd"
-    fi
+# 检查依赖
+for cmd in curl ss openssl qrencode dig systemctl bash socat; do
+    command -v $cmd &>/dev/null || { echo "[✖] 命令缺失: $cmd，请先安装"; exit 1; }
+    echo "[✔] 命令存在: $cmd"
 done
 
-# 检查端口 80/443
-for port in 80 443; do
-    if ss -tuln | grep -q ":$port "; then
-        echo "[✖] 端口 $port 已占用，请先释放"
+# 检查端口
+check_port() {
+    local PORT=$1
+    if ss -tuln | grep -q ":$PORT\b"; then
+        echo "[✖] 端口 $PORT 被占用，请先释放"
         exit 1
     else
-        echo "[✔] 端口 $port 空闲"
+        echo "[✔] 端口 $PORT 空闲"
     fi
-done
+}
+
+check_port 80
+check_port 443
 
 echo -e "\n环境检查完成 ✅"
 read -rp "确认继续执行部署吗？(y/N): " CONFIRM
-[[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && exit 0
+[[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && echo "已取消" && exit 0
 
-# 模式选择
-echo -e "\n请选择部署模式："
-echo "1) 使用域名 + Let's Encrypt 证书"
-echo "2) 使用公网 IP + 自签证书"
+# 选择模式
+echo -e "\n请选择部署模式：\n1) 使用域名 + Let's Encrypt 证书\n2) 使用公网 IP + 自签证书"
 read -rp "请输入选项 (1 或 2): " MODE
+[[ "$MODE" != "1" && "$MODE" != "2" ]] && echo "[✖] 请输入有效选项 1 或 2" && exit 1
 
 # 安装 sing-box
 if ! command -v sing-box &>/dev/null; then
     echo ">>> 安装 sing-box ..."
-    bash <(curl -fsSL https://sing-box.app/deb-install.sh)
-fi
-
-CERT_DIR="/etc/ssl/sing-box"
-mkdir -p "$CERT_DIR"
-DOMAIN=""
-USE_DOMAIN=false
-
-if [[ "$MODE" == "1" ]]; then
-    read -rp "请输入你的域名: " DOMAIN
-    [[ -z "$DOMAIN" ]] && echo "域名不能为空" && exit 1
-    USE_DOMAIN=true
-
-    DOMAIN_IP=$(dig +short A "$DOMAIN" | tail -n1)
-    [[ -z "$DOMAIN_IP" ]] && echo "[✖] 域名未解析" && exit 1
-    [[ "$DOMAIN_IP" != "$SERVER_IP" ]] && echo "[✖] 域名解析到 $DOMAIN_IP，但本机 IP 是 $SERVER_IP" && exit 1
-    echo "[✔] 域名解析正确"
-
-    # 安装 acme.sh
-    if ! command -v acme.sh &>/dev/null; then
-        echo ">>> 安装 acme.sh ..."
-        curl https://get.acme.sh | bash
-        source ~/.bashrc || true
-    fi
-    /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-
-    # 判断证书是否存在
-    if [[ -f "$CERT_DIR/fullchain.pem" && -f "$CERT_DIR/privkey.pem" ]]; then
-        echo "[✔] TLS 证书已存在，跳过申请"
-    else
-        echo ">>> 申请 Let's Encrypt TLS 证书"
-        /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
-        /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
-            --key-file "$CERT_DIR/privkey.pem" \
-            --fullchain-file "$CERT_DIR/fullchain.pem" --force
-    fi
-
-    # 自动续签 systemd
-    cat >/etc/systemd/system/acme-renew.service <<'EOF'
-[Unit]
-Description=Renew Let's Encrypt certificates via acme.sh
-[Service]
-Type=oneshot
-ExecStart=/root/.acme.sh/acme.sh --cron --home /root/.acme.sh --force
-ExecStartPost=/bin/systemctl reload-or-restart sing-box
-EOF
-
-    cat >/etc/systemd/system/acme-renew.timer <<'EOF'
-[Unit]
-Description=Run acme-renew.service daily
-[Timer]
-OnCalendar=daily
-Persistent=true
-[Install]
-WantedBy=timers.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable --now acme-renew.timer
-
-else
-    USE_DOMAIN=false
-    DOMAIN="$SERVER_IP"
-    echo "[!] 使用自签证书，CN=$DOMAIN"
-    openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-        -subj "/CN=$DOMAIN" \
-        -keyout "$CERT_DIR/privkey.pem" \
-        -out "$CERT_DIR/fullchain.pem"
+    curl -fsSL https://sing-box.app/deb-install.sh -o /tmp/sb-install.sh
+    bash /tmp/sb-install.sh
 fi
 
 # 随机端口函数
@@ -132,25 +64,58 @@ get_random_port() {
 # 输入端口
 read -rp "请输入 VLESS TCP 端口 (默认 443, 输入0随机): " VLESS_PORT
 [[ -z "$VLESS_PORT" || "$VLESS_PORT" == "0" ]] && VLESS_PORT=$(get_random_port)
-read -rp "请输入 Hysteria2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
+read -rp "请输入 HY2 UDP 端口 (默认 8443, 输入0随机): " HY2_PORT
 [[ -z "$HY2_PORT" || "$HY2_PORT" == "0" ]] && HY2_PORT=$(get_random_port)
 
-# UUID / Hysteria2 密码（安全字符）
+# 生成 UUID 和 HY2 密码
 UUID=$(cat /proc/sys/kernel/random/uuid)
-HY2_PASS=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9')
+HY2_PASS=$(openssl rand -base64 12 | tr -d '/+')
 
-chmod 644 "$CERT_DIR"/*.pem
+CERT_DIR="/etc/ssl/sing-box"
+mkdir -p "$CERT_DIR"
+chmod 700 "$CERT_DIR"
 
-# 防火墙提示
-echo -e "\n[!] 请确保防火墙开放以下端口:"
-echo "TCP $VLESS_PORT"
-echo "UDP $HY2_PORT"
-echo "如果使用 ufw，可以运行:"
-echo "  ufw allow $VLESS_PORT/tcp"
-echo "  ufw allow $HY2_PORT/udp"
+if [[ "$MODE" == "1" ]]; then
+    # 域名模式
+    read -rp "请输入你的域名: " DOMAIN
+    [[ -z "$DOMAIN" ]] && echo "[✖] 域名不能为空" && exit 1
 
-# 生成 sing-box 配置 JSON
-cat >/etc/sing-box/config.json <<EOF
+    # 安装 acme.sh
+    if ! command -v acme.sh &>/dev/null; then
+        echo ">>> 安装 acme.sh ..."
+        curl https://get.acme.sh | sh
+        source ~/.bashrc || true
+    fi
+
+    # 检查证书是否存在
+    if [[ -f "$CERT_DIR/privkey.pem" && -f "$CERT_DIR/fullchain.pem" ]]; then
+        echo "[✔] 发现已有证书，跳过申请"
+    else
+        echo ">>> 申请 Let's Encrypt TLS 证书"
+        /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+        /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
+        /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
+            --key-file "$CERT_DIR/privkey.pem" \
+            --fullchain-file "$CERT_DIR/fullchain.pem" --force
+    fi
+else
+    # 自签模式
+    DOMAIN="$SERVER_IP"
+    echo "[!] 使用自签证书 CN=$DOMAIN"
+    if openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+        -subj "/CN=$DOMAIN" \
+        -keyout "$CERT_DIR/privkey.pem" \
+        -out "$CERT_DIR/fullchain.pem"; then
+        chmod 644 "$CERT_DIR"/*.pem
+        echo "[✔] 自签证书生成成功"
+    else
+        echo "[✖] 自签证书生成失败"
+        exit 1
+    fi
+fi
+
+# 生成 sing-box 配置
+cat > /etc/sing-box/config.json <<EOF
 {
   "log": { "level": "info" },
   "inbounds": [
@@ -190,31 +155,28 @@ sleep 3
 
 # 检查端口监听
 [[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
-[[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] Hysteria2 UDP $HY2_PORT 已监听" || echo "[✖] Hysteria2 UDP $HY2_PORT 未监听"
+[[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] HY2 UDP $HY2_PORT 已监听" || echo "[✖] HY2 UDP $HY2_PORT 未监听"
 
 # 输出节点信息
 VLESS_URI="vless://$UUID@$DOMAIN:$VLESS_PORT?encryption=none&security=tls&sni=$DOMAIN&type=tcp#VLESS-$DOMAIN"
 HY2_URI="hysteria2://$HY2_PASS@$DOMAIN:$HY2_PORT?insecure=0&sni=$DOMAIN#HY2-$DOMAIN"
 
 echo -e "\n=================== VLESS 节点 ==================="
-echo "$VLESS_URI"
+echo -e "$VLESS_URI\n"
 echo "$VLESS_URI" | qrencode -t ansiutf8
 
-echo -e "\n=================== Hysteria2 节点 ==================="
-echo "$HY2_URI"
+echo -e "\n=================== HY2 节点 ==================="
+echo -e "$HY2_URI\n"
 echo "$HY2_URI" | qrencode -t ansiutf8
 
 # 生成订阅 JSON
 SUB_FILE="/root/singbox_nodes.json"
-cat > $SUB_FILE <<EOF
+cat > "$SUB_FILE" <<EOF
 {
   "vless": "$VLESS_URI",
   "hysteria2": "$HY2_URI"
 }
 EOF
 
-echo -e "\n=================== 订阅文件内容 ==================="
-cat $SUB_FILE
-echo -e "\n订阅文件已保存到：$SUB_FILE"
-
+echo "[✔] 订阅文件已保存到 $SUB_FILE"
 echo -e "\n=================== 部署完成 ==================="
