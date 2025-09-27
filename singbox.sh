@@ -1,7 +1,7 @@
 #!/bin/bash
 # Sing-box 一键部署脚本 (VLESS TCP+TLS + Hysteria2)
 # 支持：域名模式 / 自签固定域名 www.epple.com (URI 使用公网 IP)
-# Author: Chis
+# Author: Chis (优化 by ChatGPT)
 
 set -e
 
@@ -14,10 +14,46 @@ echo "=================== Sing-box 部署前环境检查 ==================="
 SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
 [[ -n "$SERVER_IP" ]] && echo "[✔] 检测到公网 IP: $SERVER_IP" || { echo "[✖] 获取公网 IP 失败"; exit 1; }
 
-# 检查依赖
-for cmd in curl ss openssl qrencode dig systemctl bash socat ufw; do
-    command -v $cmd >/dev/null 2>&1 && echo "[✔] 命令存在: $cmd" || { echo "[✖] 缺少命令: $cmd"; exit 1; }
+# 必需命令列表
+REQUIRED_CMDS=(curl ss openssl qrencode dig systemctl bash socat ufw)
+
+# 自动检测缺失命令
+MISSING_CMDS=()
+for cmd in "${REQUIRED_CMDS[@]}"; do
+    if ! command -v $cmd >/dev/null 2>&1; then
+        MISSING_CMDS+=("$cmd")
+    else
+        echo "[✔] 命令存在: $cmd"
+    fi
 done
+
+# 自动安装缺失命令 (Debian/Ubuntu)
+if [[ ${#MISSING_CMDS[@]} -gt 0 ]]; then
+    echo "[!] 检测到缺失命令: ${MISSING_CMDS[*]}"
+    echo "[!] 尝试自动安装依赖..."
+    apt update -y
+    INSTALL_PACKAGES=()
+    for cmd in "${MISSING_CMDS[@]}"; do
+        case "$cmd" in
+            dig) INSTALL_PACKAGES+=("dnsutils") ;;
+            qrencode|socat|ufw) INSTALL_PACKAGES+=("$cmd") ;;
+            *) INSTALL_PACKAGES+=("$cmd") ;;
+        esac
+    done
+    apt install -y "${INSTALL_PACKAGES[@]}"
+
+    # 再次验证
+    FAILED_CMDS=()
+    for cmd in "${REQUIRED_CMDS[@]}"; do
+        command -v $cmd >/dev/null 2>&1 || FAILED_CMDS+=("$cmd")
+    done
+    if [[ ${#FAILED_CMDS[@]} -gt 0 ]]; then
+        echo "[✖] 以下依赖安装失败: ${FAILED_CMDS[*]}"
+        exit 1
+    else
+        echo "[✔] 所有依赖安装完成"
+    fi
+fi
 
 # 检查常用端口
 for port in 80 443; do
