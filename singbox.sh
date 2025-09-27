@@ -1,6 +1,7 @@
 #!/bin/bash
 # Sing-box 一键部署脚本 (VLESS TCP+TLS + Hysteria2 UDP+TLS)
 # 支持域名/自签证书模式，自动端口检查、防火墙提醒
+# 如果已有证书则不重复申请
 # Author: ChatGPT 最终版
 
 set -e
