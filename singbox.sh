@@ -1,7 +1,6 @@
 #!/bin/bash
 # Sing-box 一键部署脚本 (VLESS TCP+TLS + HY2)
-# 支持 域名 (Let's Encrypt) / 无域名 (自签证书)
-# 完全可 curl -o script.sh && bash script.sh 执行
+# 支持域名/自签证书模式
 # Author: ChatGPT 改写版
 
 set -e
@@ -16,12 +15,18 @@ echo "[✔] Root 权限 OK"
 SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
 echo "[✔] 检测到公网 IP: $SERVER_IP"
 
-# 检查依赖
+# 安装依赖
 for cmd in curl ss openssl qrencode dig systemctl bash socat; do
-    command -v $cmd >/dev/null 2>&1 && echo "[✔] 命令存在: $cmd" || { echo "[✖] 命令 $cmd 不存在，正在安装..."; apt update -y && apt install -y $cmd; }
+    if ! command -v $cmd >/dev/null 2>&1; then
+        echo "[!] $cmd 不存在，正在安装..."
+        apt update -y
+        apt install -y $cmd
+    else
+        echo "[✔] 命令存在: $cmd"
+    fi
 done
 
-# 检查常用端口
+# 检查端口
 for port in 80 443; do
     if ss -tuln | grep -q ":$port "; then
         echo "[✖] 端口 $port 已占用，请先释放"
@@ -132,36 +137,36 @@ HY2_PASS=$(openssl rand -base64 12)
 chmod 644 "$CERT_DIR"/*.pem
 
 # 生成 sing-box 配置 JSON (去掉 decryption)
-cat >/etc/sing-box/config.json <<EOF
+cat >/etc/sing-box/config.json <<'EOF'
 {
-"log": { "level": "info" },
-"inbounds": [
-{
-"type": "vless",
-"listen": "0.0.0.0",
-"listen_port": $VLESS_PORT,
-"users": [{ "uuid": "$UUID" }],
-"tls": {
-"enabled": true,
-"server_name": "$DOMAIN",
-"certificate_path": "$CERT_DIR/fullchain.pem",
-"key_path": "$CERT_DIR/privkey.pem"
-}
-},
-{
-"type": "hysteria2",
-"listen": "0.0.0.0",
-"listen_port": $HY2_PORT,
-"users": [{ "password": "$HY2_PASS" }],
-"tls": {
-"enabled": true,
-"server_name": "$DOMAIN",
-"certificate_path": "$CERT_DIR/fullchain.pem",
-"key_path": "$CERT_DIR/privkey.pem"
-}
-}
-],
-"outbounds": [{ "type": "direct" }]
+  "log": { "level": "info" },
+  "inbounds": [
+    {
+      "type": "vless",
+      "listen": "0.0.0.0",
+      "listen_port": '"$VLESS_PORT"',
+      "users": [{ "uuid": "'"$UUID"'" }],
+      "tls": {
+        "enabled": true,
+        "server_name": "'"$DOMAIN"'",
+        "certificate_path": "'"$CERT_DIR"'/fullchain.pem",
+        "key_path": "'"$CERT_DIR"'/privkey.pem"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "listen": "0.0.0.0",
+      "listen_port": '"$HY2_PORT"',
+      "users": [{ "password": "'"$HY2_PASS"'" }],
+      "tls": {
+        "enabled": true,
+        "server_name": "'"$DOMAIN"'",
+        "certificate_path": "'"$CERT_DIR"'/fullchain.pem",
+        "key_path": "'"$CERT_DIR"'/privkey.pem"
+      }
+    }
+  ],
+  "outbounds": [{ "type": "direct" }]
 }
 EOF
 
@@ -188,10 +193,10 @@ echo "$HY2_URI" | qrencode -t ansiutf8
 
 # 生成订阅 JSON
 SUB_FILE="/root/singbox_nodes.json"
-cat > $SUB_FILE <<EOF
+cat > $SUB_FILE <<'EOF'
 {
-"vless": "$VLESS_URI",
-"hysteria2": "$HY2_URI"
+  "vless": "'"$VLESS_URI"'",
+  "hysteria2": "'"$HY2_URI"'"
 }
 EOF
 
