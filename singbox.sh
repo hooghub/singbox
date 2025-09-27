@@ -152,10 +152,6 @@ cat > $SUB_FILE <<EOF
   "hysteria2": "$HY2_URI"
 }
 EOF
-
-# 在屏幕显示订阅文件内容
-echo -e "\n=================== 订阅文件内容 ==================="
-cat $SUB_FILE
-echo -e "\n订阅文件已保存到：$SUB_FILE"
+echo -e "\n订阅文件生成：$SUB_FILE"
 
 echo -e "\n=================== 部署完成 ==================="
