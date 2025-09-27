@@ -1,5 +1,6 @@
+```bash
 #!/bin/bash
-# Sing-box 高级一键部署脚本 (VLESS TCP+TLS + HY2 UDP+TLS + QR/订阅 + Let's Encrypt + 自动续签)
+# Sing-box 高级一键部署脚本 (VLESS TCP+TLS + HY2 + 自动端口 + QR/订阅 + Let's Encrypt + 自动续签)
 # Author: chis (优化 by ChatGPT)
 
 set -e
@@ -10,32 +11,34 @@ echo "=================== Sing-box 高级部署 (Let’s Encrypt 优化版) ====
 [[ $EUID -ne 0 ]] && echo "请用 root 权限运行" && exit 1
 
 # 安装依赖
-apt-get update -y
-apt-get install -y curl socat openssl qrencode dnsutils systemd lsof jq
+apt update -y
+apt install -y curl socat openssl qrencode dnsutils systemd
 
 # 安装 acme.sh
 if ! command -v acme.sh &>/dev/null; then
     echo ">>> 安装 acme.sh ..."
     curl https://get.acme.sh | sh
+    source ~/.bashrc || true
 fi
 
-ACME_BIN="/root/.acme.sh/acme.sh"
-[[ ! -f "$ACME_BIN" ]] && echo "[✖] acme.sh 安装失败，请手动执行: curl https://get.acme.sh | sh" && exit 1
+if [[ ! -f "/root/.acme.sh/acme.sh" ]]; then
+    echo "[✖] acme.sh 安装失败，请手动执行: curl https://get.acme.sh | sh"
+    exit 1
+fi
 
 # 设置默认 CA 为 Let's Encrypt
-$ACME_BIN --set-default-ca --server letsencrypt
+/root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 
 # 安装 sing-box
 if ! command -v sing-box &>/dev/null; then
     echo ">>> 安装 sing-box ..."
-    curl -fsSL -o /tmp/sing-box-install.sh https://sing-box.app/deb-install.sh
-    bash /tmp/sing-box-install.sh
+    bash <(curl -fsSL https://sing-box.app/deb-install.sh)
 fi
 
 # 输入域名
 read -rp "请输入你的域名 (例如: lg.lyn.edu.deal): " DOMAIN
 
-# 检查域名解析到本机 IP
+# 检查域名是否解析到本机 IP
 echo ">>> 检查域名解析..."
 SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
 DOMAIN_IP=$(dig +short A "$DOMAIN" | tail -n1)
@@ -54,7 +57,7 @@ echo "[✔] 域名 $DOMAIN 已正确解析到当前 VPS ($SERVER_IP)"
 get_random_port() {
     while :; do
         PORT=$((RANDOM%50000+10000))
-        lsof -i:"$PORT" -sTCP:LISTEN &>/dev/null || break
+        ss -tuln | grep -q $PORT || break
     done
     echo $PORT
 }
@@ -76,36 +79,14 @@ CERT_DIR="/etc/ssl/$DOMAIN"
 mkdir -p "$CERT_DIR"
 
 echo ">>> 申请 Let's Encrypt TLS 证书"
-$ACME_BIN --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
-$ACME_BIN --install-cert -d "$DOMAIN" --ecc \
+/root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force
+/root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
   --key-file "$CERT_DIR/privkey.pem" \
   --fullchain-file "$CERT_DIR/fullchain.pem" --force
 
 # 修复证书权限
-chown -R root:root "$CERT_DIR"
+chown -R nobody:nogroup "$CERT_DIR"
 chmod 600 "$CERT_DIR"/*.pem
-
-# 创建 sing-box systemd 服务（如果不存在）
-if [[ ! -f "/etc/systemd/system/sing-box.service" ]]; then
-cat > /etc/systemd/system/sing-box.service <<EOF
-[Unit]
-Description=Sing-box Service
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
-Restart=on-failure
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-EOF
-fi
-
-systemctl daemon-reload
-systemctl enable sing-box
-systemctl restart sing-box
 
 # systemd 自动续签
 cat > /etc/systemd/system/acme-renew.service <<EOF
@@ -114,7 +95,7 @@ Description=Renew Let's Encrypt certificates via acme.sh
 
 [Service]
 Type=oneshot
-ExecStart=$ACME_BIN --cron --home /root/.acme.sh --force
+ExecStart=/root/.acme.sh/acme.sh --cron --home /root/.acme.sh --force
 ExecStartPost=/bin/systemctl restart sing-box
 EOF
 
@@ -133,8 +114,7 @@ EOF
 systemctl daemon-reload
 systemctl enable --now acme-renew.timer
 
-# 生成 sing-box 配置（移除 VLESS decryption 字段）
-mkdir -p /etc/sing-box
+# 生成 sing-box 配置
 cat > /etc/sing-box/config.json <<EOF
 {
   "log": { "level": "info" },
@@ -144,6 +124,7 @@ cat > /etc/sing-box/config.json <<EOF
       "listen": "0.0.0.0",
       "listen_port": $VLESS_PORT,
       "users": [{ "uuid": "$UUID" }],
+      "decryption": "none",
       "tls": {
         "enabled": true,
         "server_name": "$DOMAIN",
@@ -168,7 +149,8 @@ cat > /etc/sing-box/config.json <<EOF
 }
 EOF
 
-# 重启 sing-box
+# 启动 sing-box
+systemctl enable sing-box
 systemctl restart sing-box
 sleep 3
 
