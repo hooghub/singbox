@@ -134,7 +134,7 @@ cat > /etc/sing-box/config.json <<EOF
   "inbounds": [
     {
       "type": "vless",
-      "listen": "0.0.0.0",
+      "listen": ":",
       "listen_port": $VLESS_PORT,
       "users": [{ "uuid": "$UUID" }],
       "tls": {
@@ -146,7 +146,7 @@ cat > /etc/sing-box/config.json <<EOF
     },
     {
       "type": "hysteria2",
-      "listen": "0.0.0.0",
+      "listen": ":",
       "listen_port": $HY2_PORT,
       "users": [{ "password": "$HY2_PASS" }],
       "tls": {
