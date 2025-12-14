@@ -108,4 +108,5 @@ Hysteria2 安全密码生成 + 自动 insecure=1 提示客户端
 
 简单说，这个脚本是完全自动化、一键部署、可直接使用的 Sing-box 节点生成器，无论是用自签证书还是域名证书，都能保证客户端直接连通。
 
-```bash <(curl -Ls https://raw.githubusercontent.com/hooghub/singbox/main/singbox.sh)
+```
+bash <(curl -Ls https://raw.githubusercontent.com/hooghub/singbox/main/singbox.sh)
