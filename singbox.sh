@@ -45,7 +45,7 @@ for port in 80 443; do
     fi
 done
 
-read -rp "环境检查完成 ✅\n确认继续执行部署吗？(y/N): " CONFIRM
+read -rp "环境检查完成 ✅确认继续执行部署吗？(y/N): " CONFIRM
 [[ "$CONFIRM" =~ ^[Yy]$ ]] || exit 0
 
 # --------- 模式选择 ---------
@@ -202,10 +202,10 @@ command -v qrencode &>/dev/null && echo "$HY2_URI" | qrencode -t ansiutf8
 # --------- 生成订阅 JSON ---------
 SUB_FILE="/root/singbox_nodes.json"
 cat > $SUB_FILE <<EOF
-{
-  "vless": "$VLESS_URI",
-  "hysteria2": "$HY2_URI"
-}
+
+"$VLESS_URI",
+"$HY2_URI"
+
 EOF
 
 echo -e "\n=================== 订阅文件内容 ==================="
