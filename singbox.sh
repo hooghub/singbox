@@ -7,12 +7,19 @@ set -e
 
 echo "=================== Sing-box 部署前环境检查 ==================="
 
-# --------- 检查 root ---------
-[[ $EUID -ne 0 ]] && echo "[✖] 请用 root 权限运行" && exit 1 || echo "[✔] Root 权限 OK"
+SERVER_IPV4="$(curl -4 -s --max-time 3 ipv4.icanhazip.com 2>/dev/null || curl -4 -s --max-time 3 ifconfig.me 2>/dev/null || true)"
 
-# --------- 检测公网 IP ---------
-SERVER_IP=$(curl -s ipv4.icanhazip.com || curl -s ifconfig.me)
-[[ -n "$SERVER_IP" ]] && echo "[✔] 检测到公网 IP: $SERVER_IP" || { echo "[✖] 获取公网 IP 失败"; exit 1; }
+SERVER_IPV6=""
+if curl -6 -s --max-time 3 ipv6.icanhazip.com >/tmp/ipv6 2>/dev/null; then
+  SERVER_IPV6="$(cat /tmp/ipv6)"
+elif curl -6 -s --max-time 3 ifconfig.me >/tmp/ipv6 2>/dev/null; then
+  SERVER_IPV6="$(cat /tmp/ipv6)"
+fi
+rm -f /tmp/ipv6 2>/dev/null || true
+
+[[ -n "$SERVER_IPV4" ]] && echo "[✔] 检测到公网 IPv4: $SERVER_IPV4" || echo "[✖] 未检测到公网 IPv4"
+[[ -n "$SERVER_IPV6" ]] && echo "[✔] 检测到公网 IPv6: $SERVER_IPV6" || echo "[!] 未检测到公网 IPv6（可忽略）"
+
 
 # --------- 自动安装依赖 ---------
 REQUIRED_CMDS=(curl ss openssl qrencode dig systemctl bash socat ufw)
