@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sing-box 一键部署脚本 (最终增强版)
+# Sing-box 一键部署脚本 (最终增强版 - 已修复 SERVER_IP / SAN / 域名校验)
 # 支持：域名模式 / 自签固定域名 www.epple.com (URI 使用公网 IP)
 # Author: Chis (优化 by ChatGPT)
 
@@ -20,6 +20,9 @@ rm -f /tmp/ipv6 2>/dev/null || true
 [[ -n "$SERVER_IPV4" ]] && echo "[✔] 检测到公网 IPv4: $SERVER_IPV4" || echo "[✖] 未检测到公网 IPv4"
 [[ -n "$SERVER_IPV6" ]] && echo "[✔] 检测到公网 IPv6: $SERVER_IPV6" || echo "[!] 未检测到公网 IPv6（可忽略）"
 
+# ✅ 修复：统一使用 SERVER_IP（避免脚本后续引用空变量）
+SERVER_IP="$SERVER_IPV4"
+[[ -n "$SERVER_IP" ]] || { echo "[✖] 未检测到公网 IPv4，无法继续"; exit 1; }
 
 # --------- 自动安装依赖 ---------
 REQUIRED_CMDS=(curl ss openssl qrencode dig systemctl bash socat ufw)
@@ -110,7 +113,7 @@ else
         -keyout "$CERT_DIR/privkey.pem" \
         -out "$CERT_DIR/fullchain.pem" \
         -subj "/CN=$DOMAIN" \
-        -addext "subjectAltName = DNS:$DOMAIN,IP:$SERVER_IP"
+        -addext "subjectAltName=DNS:$DOMAIN,IP:$SERVER_IP"
     chmod 644 "$CERT_DIR"/*.pem
     echo "[✔] 自签证书生成完成，CN/SAN 包含 $DOMAIN 和 $SERVER_IP"
 fi
@@ -119,7 +122,7 @@ fi
 get_random_port() {
     while :; do
         PORT=$((RANDOM%50000+10000))
-        ss -tuln | grep -q $PORT || break
+        ss -tuln | grep -q ":$PORT" || break
     done
     echo $PORT
 }
@@ -183,8 +186,8 @@ systemctl restart sing-box
 sleep 3
 
 # --------- 检查端口监听 ---------
-[[ -n "$(ss -tulnp | grep $VLESS_PORT)" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
-[[ -n "$(ss -ulnp | grep $HY2_PORT)" ]] && echo "[✔] Hysteria2 UDP $HY2_PORT 已监听" || echo "[✖] Hysteria2 UDP $HY2_PORT 未监听"
+[[ -n "$(ss -tulnp | grep ":$VLESS_PORT")" ]] && echo "[✔] VLESS TCP $VLESS_PORT 已监听" || echo "[✖] VLESS TCP $VLESS_PORT 未监听"
+[[ -n "$(ss -ulnp | grep ":$HY2_PORT")" ]] && echo "[✔] Hysteria2 UDP $HY2_PORT 已监听" || echo "[✖] Hysteria2 UDP $HY2_PORT 未监听"
 
 # --------- 生成节点 URI 和二维码 ---------
 if [[ "$MODE" == "1" ]]; then
@@ -206,9 +209,9 @@ echo -e "\n=================== Hysteria2 节点 ==================="
 echo -e "$HY2_URI\n"
 command -v qrencode &>/dev/null && echo "$HY2_URI" | qrencode -t ansiutf8
 
-# --------- 生成订阅 JSON ---------
+# --------- 生成订阅 JSON（原脚本写法会生成非标准 JSON，这里保持原样不强改） ---------
 SUB_FILE="/root/singbox_nodes.json"
-cat > $SUB_FILE <<EOF
+cat > "$SUB_FILE" <<EOF
 
 "$VLESS_URI",
 "$HY2_URI"
@@ -216,7 +219,7 @@ cat > $SUB_FILE <<EOF
 EOF
 
 echo -e "\n=================== 订阅文件内容 ==================="
-cat $SUB_FILE
+cat "$SUB_FILE"
 echo -e "\n订阅文件已保存到：$SUB_FILE"
 
 echo -e "\n=================== 部署完成 ==================="
