@@ -213,8 +213,8 @@ command -v qrencode &>/dev/null && echo "$HY2_URI" | qrencode -t ansiutf8
 SUB_FILE="/root/singbox_nodes.json"
 cat > "$SUB_FILE" <<EOF
 
-"$VLESS_URI",
-"$HY2_URI"
+$VLESS_URI
+$HY2_URI
 
 EOF
 
